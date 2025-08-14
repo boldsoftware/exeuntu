@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'exeuntu/Dockerfile'
+      - './Dockerfile'
       - '.github/workflows/build-exeuntu.yml'
   workflow_dispatch:
 
@@ -46,7 +46,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./exeuntu
+          context: ./
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
