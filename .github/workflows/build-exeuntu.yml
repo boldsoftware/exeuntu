@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - './Dockerfile'
+      - 'Dockerfile'
       - '.github/workflows/build-exeuntu.yml'
   workflow_dispatch:
 
