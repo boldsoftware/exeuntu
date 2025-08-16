@@ -23,6 +23,7 @@ RUN apt-get update; \
 		make python3-pip python-is-python3 tree net-tools file build-essential \
 		pipx psmisc bsdmainutils sudo \
 		openssh-server openssh-client \
+		iputils-ping socat netcat-openbsd \
 		unzip util-linux rsync && \
 	apt-get clean && \
 	rm -rf /var/lib/apt/lists/* && \
@@ -60,3 +61,7 @@ RUN go install golang.org/x/tools/cmd/goimports@latest; \
 
 ENV GOTOOLCHAIN=auto
 ENV EXEUNTU=1
+
+# Add claude script to PATH (in /usr/bin to avoid conflict with npm's /usr/local/bin/claude)
+COPY claude /usr/bin/claude
+RUN chmod +x /usr/bin/claude
