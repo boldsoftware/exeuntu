@@ -21,7 +21,7 @@ RUN apt-get update; \
 		ca-certificates wget \
 		git jq sqlite3 curl vim lsof iproute2 less \
 		make python3-pip python-is-python3 tree net-tools file build-essential \
-		pipx psmisc bsdmainutils sudo \
+		pipx psmisc bsdmainutils sudo socat \
 		openssh-server openssh-client \
 		iputils-ping socat netcat-openbsd \
 		unzip util-linux rsync && \
