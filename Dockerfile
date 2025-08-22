@@ -75,5 +75,5 @@ ENV EXEUNTU=1
 COPY claude /usr/bin/claude
 RUN chmod +x /usr/bin/claude
 
-# Set default user to exedev
+# TODO: Set default user to exedev
 USER exedev
