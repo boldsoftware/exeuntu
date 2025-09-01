@@ -26,7 +26,7 @@ RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes /etc/dpkg/dpkg.cfg.d/01_nodoc && \
 		iputils-ping socat netcat-openbsd \
 		unzip util-linux rsync \
 		ubuntu-server ubuntu-dev-tools ubuntu-standard \
-		man-db manpages manpages-dev tini && \
+		man-db manpages manpages-dev && \
 	apt-get clean && \
 	rm -rf /var/lib/apt/lists/*
 
@@ -75,8 +75,4 @@ ENV EXEUNTU=1
 COPY claude /usr/bin/claude
 RUN chmod +x /usr/bin/claude
 
-# Set tini as entrypoint for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# TODO: Set default user to exedev
 USER exedev
