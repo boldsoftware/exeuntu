@@ -2,6 +2,7 @@
 Description=Shelley-the-Agent
 BindsTo=shelley.socket
 After=shelley.socket
+ConditionPathExists=/usr/local/bin/shelley
 
 [Service]
 Type=exec
