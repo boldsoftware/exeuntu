@@ -26,6 +26,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_CATALOG = join(HERE, "catalog.json");
 const CACHE_DIR = join(homedir(), ".cache", "pi-exe-dev");
 const CACHE_FILE = join(CACHE_DIR, "catalog.json");
+// Per-user record of the last routing fingerprint surfaced via ctx.ui.notify,
+// used to suppress repeat notifications when nothing has changed across pi
+// launches. AGENTS.md asks us to be sparing with text in the SSH UI.
+const NOTIFY_STATE_FILE = join(CACHE_DIR, "last-routing.json");
+
 // Paths to pi's auth and model config files. The factory runs before pi binds
 // its runtime APIs, so we read these directly when deciding whether to register
 // gateway overrides. Use pi's own agent-dir resolver so PI_CODING_AGENT_DIR
@@ -568,10 +573,67 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  // /reload reruns the factory, but the model registry persists across reloads;
-  // session_start is the first hook with ctx, so reconcile stale overrides there.
+  const routingForNotice = (ctx: ExtensionContext): { gateway: string[]; userConfig: string[] } => {
+    const userConfigured = loadUserConfiguredProviders(gatewayInfos, ctx);
+    const gateway: string[] = [];
+    const userConfig: string[] = [];
+    for (const id of gatewayInfos.keys()) {
+      if (providerHasGatewayModels(ctx, id)) gateway.push(id);
+      else if (userConfigured.has(id)) userConfig.push(id);
+    }
+    return { gateway: gateway.sort(), userConfig: userConfig.sort() };
+  };
+
+  // Surface routing once on startup/reload. Stay quiet in the common all-gateway
+  // path, but notify when any gateway provider is bypassed by user config or
+  // when the kill switch is active. Startup notifications are de-duped across
+  // launches; /reload always shows the current decision.
   pi.on("session_start", async (event, ctx) => {
-    if (event.reason === "startup" || event.reason === "reload") await sync(ctx);
+    if (event.reason !== "startup" && event.reason !== "reload") return;
+    await sync(ctx);
+    if (!ctx.hasUI) return;
+
+    const routing = routingForNotice(ctx);
+    let message: string | undefined;
+    if (disabled) {
+      message = "exe.dev gateway disabled (EXE_DEV_DISABLE_GATEWAY); using your own provider credentials.";
+    } else if (routing.userConfig.length > 0) {
+      const parts = [`Using your credentials/config for: ${routing.userConfig.join(", ")}.`];
+      if (routing.gateway.length > 0) {
+        parts.push(`Using exe.dev gateway for: ${routing.gateway.join(", ")}.`);
+        parts.push("Set EXE_DEV_DISABLE_GATEWAY=1 to bypass the gateway entirely.");
+      }
+      message = parts.join(" ");
+    }
+    if (message == null) {
+      try {
+        unlinkSync(NOTIFY_STATE_FILE);
+      } catch {
+        // Already absent or unreadable; no-op.
+      }
+      return;
+    }
+
+    const fingerprint = JSON.stringify({
+      v: 1,
+      disabled,
+      gateway: routing.gateway,
+      userCreds: routing.userConfig,
+    });
+    if (event.reason === "startup") {
+      try {
+        if (readFileSync(NOTIFY_STATE_FILE, "utf8") === fingerprint) return;
+      } catch {
+        // First run, or unreadable: notify.
+      }
+    }
+    ctx.ui.notify(message, "info");
+    try {
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(NOTIFY_STATE_FILE, fingerprint);
+    } catch {
+      // Best effort: a write failure just means we'll re-show next launch.
+    }
   });
   pi.on("input", async (_event, ctx) => sync(ctx));
   pi.on("model_select", async (_event, ctx) => sync(ctx));
