@@ -1,4 +1,11 @@
-import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@mariozechner/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ProviderConfig,
+  type ProviderModelConfig,
+} from "@mariozechner/pi-coding-agent";
+import { findEnvKeys } from "@mariozechner/pi-ai";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,6 +26,117 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_CATALOG = join(HERE, "catalog.json");
 const CACHE_DIR = join(homedir(), ".cache", "pi-exe-dev");
 const CACHE_FILE = join(CACHE_DIR, "catalog.json");
+// Paths to pi's auth and model config files. The factory runs before pi binds
+// its runtime APIs, so we read these directly when deciding whether to register
+// gateway overrides. Use pi's own agent-dir resolver so PI_CODING_AGENT_DIR
+// stays in sync.
+const AUTH_FILE = join(getAgentDir(), "auth.json");
+const MODELS_FILE = join(getAgentDir(), "models.json");
+
+type GatewayProviderInfo = {
+  config: ProviderConfig;
+  // Model ids the gateway accepts for this provider. Unknown when falling back
+  // to pi's built-in catalog, so custom models are treated conservatively.
+  modelIds?: ReadonlySet<string>;
+};
+
+function readJSONFile(path: string): unknown | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+// loadAuthProviders returns ids with a non-empty entry in auth.json. pi removes
+// entries on logout rather than leaving empty objects, so any present
+// non-empty object means the user has set credentials. Deliberately uncached:
+// /login can add credentials while pi is running.
+function loadAuthProviders(): Set<string> {
+  const out = new Set<string>();
+  const parsed = readJSONFile(AUTH_FILE);
+  if (!parsed || typeof parsed !== "object") return out;
+  for (const [id, entry] of Object.entries(parsed as Record<string, unknown>)) {
+    if (entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length > 0) {
+      out.add(id);
+    }
+  }
+  return out;
+}
+
+function hasNonEmptyObject(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length > 0
+  );
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+function modelNeedsDirectRoute(model: unknown, gatewayModelIds: ReadonlySet<string> | undefined): boolean {
+  if (!model || typeof model !== "object" || Array.isArray(model)) return true;
+  const cfg = model as Record<string, unknown>;
+  if (nonEmptyString(cfg.baseUrl) || nonEmptyString(cfg.api) || hasNonEmptyObject(cfg.headers)) return true;
+  if (!gatewayModelIds) return true;
+  return typeof cfg.id !== "string" || !gatewayModelIds.has(cfg.id);
+}
+
+// models.json can contain pure metadata tweaks (compat/modelOverrides, or a
+// model entry that only renames a gateway-supported id). Those should not
+// disable the gateway. Only auth, endpoint/request settings, or custom models
+// need pi's built-in/custom provider route to win.
+function providerNeedsDirectRoute(entry: unknown, gatewayModelIds: ReadonlySet<string> | undefined): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const cfg = entry as Record<string, unknown>;
+  if (
+    nonEmptyString(cfg.apiKey) ||
+    nonEmptyString(cfg.baseUrl) ||
+    nonEmptyString(cfg.api) ||
+    typeof cfg.authHeader === "boolean" ||
+    hasNonEmptyObject(cfg.headers)
+  ) {
+    return true;
+  }
+  return Array.isArray(cfg.models) && cfg.models.some((model) => modelNeedsDirectRoute(model, gatewayModelIds));
+}
+
+function loadModelsJSONRoutingProviders(providerInfos: Map<string, GatewayProviderInfo>): Set<string> {
+  const out = new Set<string>();
+  const parsed = readJSONFile(MODELS_FILE);
+  if (!parsed || typeof parsed !== "object") return out;
+  const providers = (parsed as { providers?: unknown }).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return out;
+  for (const [id, entry] of Object.entries(providers as Record<string, unknown>)) {
+    const info = providerInfos.get(id);
+    if (info && providerNeedsDirectRoute(entry, info.modelIds)) out.add(id);
+  }
+  return out;
+}
+
+function loadUserConfiguredProviders(
+  providerInfos: Map<string, GatewayProviderInfo>,
+  ctx?: ExtensionContext,
+): Set<string> {
+  const out = loadModelsJSONRoutingProviders(providerInfos);
+  if (ctx) {
+    for (const id of providerInfos.keys()) {
+      if (ctx.modelRegistry.authStorage.hasAuth(id)) out.add(id);
+    }
+    return out;
+  }
+  for (const id of loadAuthProviders()) {
+    if (providerInfos.has(id)) out.add(id);
+  }
+  for (const id of providerInfos.keys()) {
+    if ((findEnvKeys(id)?.length ?? 0) > 0) out.add(id);
+  }
+  return out;
+}
 
 // Keep in lockstep with llmpricing.CatalogSchemaVersion. Any breaking change
 // there requires shipping a new exe-dev pi extension that knows the new shape;
@@ -264,11 +382,12 @@ function chatModelsWithFullMetadata(p: CatalogProvider): ProviderModelConfig[] {
   return out;
 }
 
-// registerOne registers a single provider from the catalog. p.id must be one
-// of pi-ai's KnownProvider names (anthropic, openai, fireworks, ...) because
-// pi merges its built-in catalog by provider name; the Go-side providerCatalog
-// in llmpricing/pricing.go is the source of truth for these IDs.
-function registerOne(pi: ExtensionAPI, p: CatalogProvider): void {
+// configFromCatalogProvider builds the gateway provider config from the
+// catalog. p.id must be one of pi-ai's KnownProvider names (anthropic, openai,
+// fireworks, ...) because pi merges its built-in catalog by provider name; the
+// Go-side providerCatalog in llmpricing/pricing.go is the source of truth for
+// these IDs.
+function configFromCatalogProvider(p: CatalogProvider): ProviderConfig {
   const path = p.path.replace(/^\/+/, "");
   const config: ProviderConfig = {
     baseUrl: `${GATEWAY}/${path}`,
@@ -286,37 +405,129 @@ function registerOne(pi: ExtensionAPI, p: CatalogProvider): void {
   // this provider. anthropic and openai rely on this — the gateway does not
   // ship rich metadata for them, only cost.
   if (models.length > 0) config.models = models;
-  pi.registerProvider(p.id, config);
+  return config;
+}
+
+const FALLBACK_PROVIDER_CONFIGS: Array<[string, ProviderConfig]> = [
+  ["anthropic", { baseUrl: `${GATEWAY}/anthropic`, apiKey: "gateway" }],
+  ["openai", { baseUrl: `${GATEWAY}/openai/v1`, apiKey: "gateway" }],
+  ["fireworks", { baseUrl: `${GATEWAY}/fireworks/inference/v1`, apiKey: "gateway", api: "openai-completions" }],
+];
+
+function isGatewayBaseUrl(baseUrl: string | undefined): boolean {
+  return baseUrl === GATEWAY || baseUrl?.startsWith(`${GATEWAY}/`) === true;
+}
+
+function providerHasGatewayModels(ctx: ExtensionContext, providerId: string): boolean {
+  return ctx.modelRegistry.getAll().some((m) => m.provider === providerId && isGatewayBaseUrl(m.baseUrl));
+}
+
+type CurrentModel = NonNullable<ExtensionContext["model"]>;
+
+// replacementForCurrentGatewayModel returns a non-gateway model to select
+// after unregistering this extension's provider override. Usually the same
+// model id exists in pi's built-in catalog. For gateway-only catalog entries
+// (notably Fireworks), keep the model metadata but borrow the restored
+// provider's upstream base URL/API/compat so the user's credentials go direct.
+function replacementForCurrentGatewayModel(ctx: ExtensionContext, current: CurrentModel): CurrentModel | undefined {
+  const same = ctx.modelRegistry.find(current.provider, current.id);
+  if (same && !isGatewayBaseUrl(same.baseUrl)) return same;
+  const template = ctx.modelRegistry.getAll().find((m) => m.provider === current.provider && !isGatewayBaseUrl(m.baseUrl));
+  if (!template) return undefined;
+  return { ...current, baseUrl: template.baseUrl, api: template.api, compat: template.compat };
 }
 
 export default function (pi: ExtensionAPI) {
   // Only activate on exe.dev VMs.
   if (!existsSync("/exe.dev")) return;
 
+  const gatewayInfos = new Map<string, GatewayProviderInfo>();
   const loaded = loadCatalogSync();
   if (loaded) {
     for (const p of loaded.catalog.providers) {
-      try {
-        registerOne(pi, p);
-      } catch (err) {
-        console.warn(`[pi-exe-dev] failed to register provider ${p.id}: ${(err as Error).message}`);
-      }
+      const modelIds = new Set(p.models.map((m) => m.id));
+      gatewayInfos.set(p.id, {
+        config: configFromCatalogProvider(p),
+        modelIds: modelIds.size > 0 ? modelIds : undefined,
+      });
     }
   } else {
-    // No cache, no bundled fallback (or both invalid). Point each known
-    // gateway provider at its gateway URL with no models defined; pi-ai
-    // keeps its built-in catalog for the provider. Some built-in models may
-    // not be gateway-allowed and will error at request time, but the model
-    // picker still works for the common cases.
     console.warn(`[pi-exe-dev] no usable catalog; falling back to pi's built-in models for anthropic/openai/fireworks`);
-    pi.registerProvider("anthropic", { baseUrl: `${GATEWAY}/anthropic`, apiKey: "gateway" });
-    pi.registerProvider("openai", { baseUrl: `${GATEWAY}/openai/v1`, apiKey: "gateway" });
-    pi.registerProvider("fireworks", {
-      baseUrl: `${GATEWAY}/fireworks/inference/v1`,
-      apiKey: "gateway",
-      api: "openai-completions",
-    });
+    for (const [id, config] of FALLBACK_PROVIDER_CONFIGS) gatewayInfos.set(id, { config });
   }
+
+  const registerGateway = (id: string, info: GatewayProviderInfo): boolean => {
+    try {
+      pi.registerProvider(id, info.config);
+      return true;
+    } catch (err) {
+      console.warn(`[pi-exe-dev] failed to register provider ${id}: ${(err as Error).message}`);
+      return false;
+    }
+  };
+
+  const userConfiguredAtLoad = loadUserConfiguredProviders(gatewayInfos);
+  for (const [id, info] of gatewayInfos) {
+    if (userConfiguredAtLoad.has(id)) continue;
+    registerGateway(id, info);
+  }
+
+  const selectDirectReplacement = async (ctx: ExtensionContext, id: string): Promise<void> => {
+    const current = ctx.model;
+    if (current?.provider !== id || !isGatewayBaseUrl(current.baseUrl)) return;
+    const replacement = replacementForCurrentGatewayModel(ctx, current);
+    if (!replacement) {
+      console.warn(`[pi-exe-dev] no non-gateway replacement for current model ${current.id}; pick a new model`);
+      return;
+    }
+    try {
+      const ok = await pi.setModel(replacement);
+      if (!ok) {
+        console.warn(`[pi-exe-dev] setModel(${replacement.id}) failed after unregister: no auth for ${replacement.provider}`);
+      }
+    } catch (err) {
+      console.warn(`[pi-exe-dev] setModel(${replacement.id}) failed after unregister: ${(err as Error).message}`);
+    }
+  };
+
+  // Reconcile factory-time decisions with credentials/config changed later via
+  // /login, /logout, auth.json edits, models.json edits, or /reload. This is
+  // intentionally small and per-provider: unregister when direct user config
+  // should win; restore the gateway when that config disappears.
+  let syncing = false;
+  const sync = async (ctx: ExtensionContext): Promise<void> => {
+    if (syncing) return;
+    syncing = true;
+    try {
+      ctx.modelRegistry.authStorage.reload();
+      const userConfigured = loadUserConfiguredProviders(gatewayInfos, ctx);
+      let refreshedForRestore = false;
+      for (const [id, info] of gatewayInfos) {
+        const hasGateway = providerHasGatewayModels(ctx, id);
+        const wantsGateway = !userConfigured.has(id);
+        if (hasGateway && !wantsGateway) {
+          pi.unregisterProvider(id);
+          await selectDirectReplacement(ctx, id);
+        } else if (!hasGateway && wantsGateway) {
+          if (!refreshedForRestore) {
+            ctx.modelRegistry.refresh();
+            refreshedForRestore = true;
+          }
+          registerGateway(id, info);
+        }
+      }
+    } finally {
+      syncing = false;
+    }
+  };
+
+  // /reload reruns the factory, but the model registry persists across reloads;
+  // session_start is the first hook with ctx, so reconcile stale overrides there.
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason === "startup" || event.reason === "reload") await sync(ctx);
+  });
+  pi.on("input", async (_event, ctx) => sync(ctx));
+  pi.on("model_select", async (_event, ctx) => sync(ctx));
 
   // Refresh the on-disk cache so the next pi launch starts from fresh data.
   void refreshCatalogAsync();
