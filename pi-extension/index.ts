@@ -437,9 +437,52 @@ function replacementForCurrentGatewayModel(ctx: ExtensionContext, current: Curre
   return { ...current, baseUrl: template.baseUrl, api: template.api, compat: template.compat };
 }
 
+let procEnvCache: Map<string, string> | null = null;
+
+// envValue mirrors pi-ai's Bun compiled-binary workaround for sandboxed Linux
+// environments where process.env can be empty. Local to the exe.dev kill
+// switch; provider env vars use pi-ai's findEnvKeys().
+function envValue(key: string): string | undefined {
+  const value = process.env[key];
+  if (value !== undefined) return value;
+  if (!process.versions?.bun || Object.keys(process.env).length > 0) return undefined;
+  if (procEnvCache === null) {
+    procEnvCache = new Map();
+    try {
+      const data = readFileSync("/proc/self/environ", "utf8");
+      for (const entry of data.split("\0")) {
+        const idx = entry.indexOf("=");
+        if (idx > 0) procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
+      }
+    } catch {
+      // /proc/self/environ may not be readable.
+    }
+  }
+  return procEnvCache.get(key);
+}
+
+// Master kill-switch. Setting EXE_DEV_DISABLE_GATEWAY to a truthy value
+// ("1", "true", "yes", or "on", case-insensitive) makes the extension skip
+// every gateway provider registration. The exe.dev system-prompt injection
+// still runs so the model knows it's in a VM, but pi falls back to its
+// built-in providers and the user's own credentials.
+//
+// Allowlisting truthy values rather than blocklisting falsy ones avoids the
+// systemd-style trap where EXE_DEV_DISABLE_GATEWAY=off would otherwise
+// silently *disable* the gateway. Read once when the extension factory runs;
+// /reload reruns the factory and picks up changes.
+const TRUTHY_KILL_SWITCH = new Set(["1", "true", "yes", "on"]);
+function gatewayDisabled(): boolean {
+  const v = envValue("EXE_DEV_DISABLE_GATEWAY");
+  if (v == null) return false;
+  return TRUTHY_KILL_SWITCH.has(v.toLowerCase());
+}
+
 export default function (pi: ExtensionAPI) {
   // Only activate on exe.dev VMs.
   if (!existsSync("/exe.dev")) return;
+
+  const disabled = gatewayDisabled();
 
   const gatewayInfos = new Map<string, GatewayProviderInfo>();
   const loaded = loadCatalogSync();
@@ -452,7 +495,9 @@ export default function (pi: ExtensionAPI) {
       });
     }
   } else {
-    console.warn(`[pi-exe-dev] no usable catalog; falling back to pi's built-in models for anthropic/openai/fireworks`);
+    if (!disabled) {
+      console.warn(`[pi-exe-dev] no usable catalog; falling back to pi's built-in models for anthropic/openai/fireworks`);
+    }
     for (const [id, config] of FALLBACK_PROVIDER_CONFIGS) gatewayInfos.set(id, { config });
   }
 
@@ -467,9 +512,11 @@ export default function (pi: ExtensionAPI) {
   };
 
   const userConfiguredAtLoad = loadUserConfiguredProviders(gatewayInfos);
-  for (const [id, info] of gatewayInfos) {
-    if (userConfiguredAtLoad.has(id)) continue;
-    registerGateway(id, info);
+  if (!disabled) {
+    for (const [id, info] of gatewayInfos) {
+      if (userConfiguredAtLoad.has(id)) continue;
+      registerGateway(id, info);
+    }
   }
 
   const selectDirectReplacement = async (ctx: ExtensionContext, id: string): Promise<void> => {
@@ -504,7 +551,7 @@ export default function (pi: ExtensionAPI) {
       let refreshedForRestore = false;
       for (const [id, info] of gatewayInfos) {
         const hasGateway = providerHasGatewayModels(ctx, id);
-        const wantsGateway = !userConfigured.has(id);
+        const wantsGateway = !disabled && !userConfigured.has(id);
         if (hasGateway && !wantsGateway) {
           pi.unregisterProvider(id);
           await selectDirectReplacement(ctx, id);
