@@ -279,10 +279,15 @@ RUN mkdir -p /home/exedev/.local/bin && \
 ARG PI_VERSION=
 RUN ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') && \
     if [ -z "${PI_VERSION}" ]; then \
-        PI_VERSION=$(curl -fsSL https://api.github.com/repos/badlogic/pi-mono/releases/latest | jq -r '.tag_name'); \
+        # Pi's updater follows the npm package. GitHub's latest release and
+        # latest/download URLs can lag behind, so resolve via npm and fetch the
+        # matching tagged GitHub asset. Revisit if upstream makes them agree.
+        PI_VERSION=$(curl -fsSL https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest | jq -r '.version'); \
     fi && \
-    curl -fsSL "https://github.com/badlogic/pi-mono/releases/download/${PI_VERSION}/pi-linux-${ARCH}.tar.gz" | \
+    PI_TAG="v${PI_VERSION#v}" && \
+    curl -fsSL "https://github.com/earendil-works/pi/releases/download/${PI_TAG}/pi-linux-${ARCH}.tar.gz" | \
     tar xz -C /home/exedev/.local/ && \
+    test "$(/home/exedev/.local/pi/pi --version)" = "${PI_TAG#v}" && \
     ln -s /home/exedev/.local/pi/pi /home/exedev/.local/bin/pi && \
     chown -R exedev:exedev /home/exedev/.local/pi && \
     ln -s /home/exedev/.local/bin/pi /usr/local/bin/pi
