@@ -183,6 +183,10 @@ RUN usermod -l exedev -c "exe.dev user" ubuntu && \
 	mkdir -p /var/lib/systemd/linger && \
 	touch /var/lib/systemd/linger/exedev
 
+# Bake /etc/fstab so systemd-growfs@-.service resizes the root filesystem on
+# first boot after the disk is grown.
+RUN echo '/dev/vda / ext4 defaults,x-systemd.growfs 0 1' > /etc/fstab
+
 ENV EXEUNTU=1
 
 # https://github.com/trfore/docker-ubuntu2404-systemd/blob/main/Dockerfile suggests the following
