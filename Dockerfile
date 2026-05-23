@@ -12,6 +12,15 @@ SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirror://mirrors.ubuntu.com/mirrors.txt|' /etc/apt/sources.list && \
         rm -f /etc/dpkg/dpkg.cfg.d/excludes /etc/dpkg/dpkg.cfg.d/01_nodoc && \
 	apt-get update && \
+	# Pull in all available security/bugfix updates for packages already
+	# in the base ubuntu:24.04 image. Without this we ship whatever was
+	# current when Canonical last rebuilt the base layer, which can be
+	# months behind (e.g. nginx Rift, CVE-2026-42945). The weekly cron
+	# rebuild + no-cache will keep this fresh going forward.
+	DEBIAN_FRONTEND=noninteractive apt-get -y \
+		-o Dpkg::Options::=--force-confold \
+		-o Dpkg::Options::=--force-confdef \
+		dist-upgrade && \
 	# Pre-configure debconf to avoid interactive prompts
 	echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
 	# Pre-configure pbuilder to avoid mirror prompt
