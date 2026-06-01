@@ -55,8 +55,11 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirror://mirrors.ubuntu.c
 		gh \
 		dbus-user-session \
 		&& apt-get remove -y pollinate ubuntu-fan && \
-	# Allow non-root users to use ping without sudo by granting CAP_NET_RAW
-	setcap cap_net_raw=+ep /usr/bin/ping && \
+		# openssh-server generates host keys during package configuration.
+		# Do not bake those per-image private keys into exeuntu.
+		rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub && \
+		# Allow non-root users to use ping without sudo by granting CAP_NET_RAW
+		setcap cap_net_raw=+ep /usr/bin/ping && \
 	fc-cache -f -v && \
 	# Remove policy-rc.d so services can start normally (the base image includes this
 	# to prevent services from starting during build, but we run systemd at runtime)
