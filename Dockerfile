@@ -1,6 +1,15 @@
 # Stage 1: Get Chrome/Chromium from chromedp/headless-shell
 FROM docker.io/chromedp/headless-shell:stable AS chrome
 
+# Build the guest-facing exeuntu helper.
+FROM docker.io/library/golang:1.26.4 AS exeuntu-cli
+ARG EXEUNTU_GIT_VERSION=unknown
+WORKDIR /src/exeuntu-cli
+COPY cli/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=mod -tags osusergo,netgo \
+        -ldflags "-X main.gitVersion=${EXEUNTU_GIT_VERSION} -extldflags=-static -s -w" \
+        -o /out/exeuntu .
+
 FROM ubuntu:24.04
 
 # Switch from dash to bash by default.
@@ -77,6 +86,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://go.dev/dl/${GO_VERSION}.linux-${ARCH}.tar.gz" | tar -xzC /usr/local && \
     ln -s /usr/local/go/bin/go /usr/local/bin/go && \
     ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
+COPY --from=exeuntu-cli /out/exeuntu /usr/local/bin/exeuntu
 
 # Install uv to /usr/local/bin
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
