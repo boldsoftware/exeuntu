@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test --experimental-strip-types request_rewrite.test.ts integration_catalog.test.ts"
+    "test": "node --test --experimental-strip-types request_rewrite.test.ts integration_catalog.test.ts routing_preference.test.ts model_choice.test.ts"
   },
   "pi": {
     "extensions": [

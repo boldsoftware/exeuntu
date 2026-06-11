@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   discoverIntegrationCatalogs,
+  integrationPromptAvailabilityLabel,
   providerInfosFromIntegrationCatalogs,
   type Catalog,
   type JSONFetcher,
@@ -183,4 +184,10 @@ test("warns once when integration pricing is absent", () => {
   assert.ok(infos.get("openai"));
   assert.equal(warnings.length, 1);
   assert.match(warnings[0] ?? "", /missing pricing for integration model openai\/gpt-5\.5/);
+});
+
+test("formats prompt integration availability with at most two names", () => {
+  assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha"]), "alpha, beta");
+  assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "gamma"]), "alpha, beta, ...");
+  assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "beta", "gamma"]), "alpha, beta, ...");
 });

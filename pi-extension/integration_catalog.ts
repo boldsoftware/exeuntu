@@ -429,6 +429,12 @@ export function integrationProviderDisplayName(names: string[]): string {
   return `${uniq[0]} + ${uniq.length - 1} more`;
 }
 
+export function integrationPromptAvailabilityLabel(names: string[]): string {
+  const uniq = Array.from(new Set(names)).sort();
+  if (uniq.length <= 2) return uniq.join(", ");
+  return `${uniq.slice(0, 2).join(", ")}, ...`;
+}
+
 export function providerInfosFromIntegrationCatalogs(
   integrations: DiscoveredIntegration[],
   pricingCatalog: Catalog | undefined,

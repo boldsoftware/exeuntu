@@ -13,6 +13,7 @@ import {
   configFromCatalogProvider,
   discoverIntegrationCatalogs,
   fetchJSONWithTimeout,
+  integrationPromptAvailabilityLabel,
   integrationProviderDisplayName,
   providerInfo,
   providerInfosFromIntegrationCatalogs,
@@ -20,10 +21,17 @@ import {
   type Catalog,
   type GatewayProviderInfo,
 } from "./integration_catalog.ts";
+import { chooseDefaultModel, modelChoiceLabel } from "./model_choice.ts";
 import {
   nativeModelIDForGeneratedModel,
   rewriteIntegrationProviderPayload,
 } from "./request_rewrite.ts";
+import {
+  llmIntegrationPromptDecision,
+  readLLMIntegrationPreference,
+  writeLLMIntegrationPreference,
+  type LLMIntegrationPreference,
+} from "./routing_preference.ts";
 
 // LLM integration discovery and gateway fallback endpoints, reachable inside
 // every exe.dev VM. The metadata server
@@ -57,6 +65,7 @@ const NOTIFY_STATE_FILE = join(CACHE_DIR, "last-routing.json");
 // stays in sync.
 const AUTH_FILE = join(getAgentDir(), "auth.json");
 const MODELS_FILE = join(getAgentDir(), "models.json");
+const LLM_INTEGRATION_PREFERENCE_FILE = join(getAgentDir(), "exe-dev-llm-integration.json");
 
 function readJSONFile(path: string): unknown | undefined {
   if (!existsSync(path)) return undefined;
@@ -325,20 +334,26 @@ export default async function (pi: ExtensionAPI) {
   if (!existsSync("/exe.dev")) return;
 
   const disabled = gatewayDisabled();
+  let llmIntegrationPreference: LLMIntegrationPreference | undefined =
+    readLLMIntegrationPreference(LLM_INTEGRATION_PREFERENCE_FILE);
 
   const gatewayInfos = new Map<string, GatewayProviderInfo>();
   let routeLabel = "exe.dev gateway";
+  let availableIntegrationsLabel = routeLabel;
   const loaded = loadCatalogSync();
   const discovered = await discoverIntegrationCatalogs(REFLECTION_INTEGRATIONS_URLS, (url) =>
     fetchJSONWithTimeout(url, FETCH_TIMEOUT_MS),
   );
+  const usingReflectedIntegration = discovered.found;
   if (discovered.found) {
-    routeLabel = integrationProviderDisplayName(discovered.integrations.map((integration) => integration.name));
+    const integrationNames = discovered.integrations.map((integration) => integration.name);
+    routeLabel = integrationProviderDisplayName(integrationNames);
+    availableIntegrationsLabel = integrationPromptAvailabilityLabel(integrationNames);
     for (const [id, info] of providerInfosFromIntegrationCatalogs(discovered.integrations, loaded?.catalog)) {
       gatewayInfos.set(id, info);
     }
     if (gatewayInfos.size === 0 && !disabled) {
-      console.warn(`[pi-exe-dev] LLM integration discovered, but no supported models were available; skipping gateway fallback`);
+      console.warn(`[pi-exe-dev] LLM integration discovered, but no supported models were available`);
     }
   } else if (loaded) {
     for (const p of loaded.catalog.providers) {
@@ -357,6 +372,10 @@ export default async function (pi: ExtensionAPI) {
     for (const [id, config] of FALLBACK_PROVIDER_CONFIGS) gatewayInfos.set(id, providerInfo(config));
   }
 
+  const llmIntegrationRoutingEnabled = (): boolean => {
+    return !usingReflectedIntegration || llmIntegrationPreference !== "skip";
+  };
+
   const registerGateway = (id: string, info: GatewayProviderInfo): boolean => {
     try {
       pi.registerProvider(id, info.config);
@@ -368,7 +387,7 @@ export default async function (pi: ExtensionAPI) {
   };
 
   const userConfiguredAtLoad = loadUserConfiguredProviders(gatewayInfos);
-  if (!disabled) {
+  if (!disabled && llmIntegrationRoutingEnabled()) {
     for (const [id, info] of gatewayInfos) {
       if (userConfiguredAtLoad.has(id)) continue;
       registerGateway(id, info);
@@ -407,7 +426,7 @@ export default async function (pi: ExtensionAPI) {
       let refreshedForRestore = false;
       for (const [id, info] of gatewayInfos) {
         const hasManaged = providerHasManagedModels(ctx, id, info);
-        const wantsManaged = !disabled && !userConfigured.has(id);
+        const wantsManaged = !disabled && llmIntegrationRoutingEnabled() && !userConfigured.has(id);
         if (hasManaged && !wantsManaged) {
           pi.unregisterProvider(id);
           await selectDirectReplacement(ctx, id, info);
@@ -435,6 +454,77 @@ export default async function (pi: ExtensionAPI) {
     return { managed: managed.sort(), userConfig: userConfig.sort() };
   };
 
+  const availableModelsForPreference = (ctx: ExtensionContext, preference: LLMIntegrationPreference): CurrentModel[] => {
+    return ctx.modelRegistry
+      .getAvailable()
+      .filter((model) => {
+        const info = gatewayInfos.get(model.provider);
+        const managed = !!info && isManagedBaseUrl(model.baseUrl, info);
+        return preference === "use" ? managed : !managed;
+      });
+  };
+
+  const selectDefaultInitialModel = async (ctx: ExtensionContext, preference: LLMIntegrationPreference): Promise<void> => {
+    const models = availableModelsForPreference(ctx, preference);
+    if (models.length === 0) {
+      if (preference === "use" && usingReflectedIntegration) {
+        ctx.ui.notify(`No models were found in ${routeLabel}. Configure pi manually, then use /model to select a model.`, "error");
+      } else {
+        ctx.ui.notify("No models are available for this choice. Configure pi, then use /model to select a model.", "error");
+      }
+      return;
+    }
+
+    const model = chooseDefaultModel(models);
+    if (!model) {
+      ctx.ui.notify("No models are available for this choice. Configure pi, then use /model to select a model.", "error");
+      return;
+    }
+    const ok = await pi.setModel(model);
+    if (!ok) {
+      ctx.ui.notify(`Could not select ${modelChoiceLabel(model)}. Use /model to select a model.`, "error");
+      return;
+    }
+    const theme = ctx.ui.theme;
+    ctx.ui.notify(
+      `${theme.bold(theme.fg("warning", "Selected model:"))} ${theme.fg("accent", modelChoiceLabel(model))}. ${theme.fg("muted", "Use")} ${theme.fg("accent", "/model")} ${theme.fg("muted", "to select a different model later.")}`,
+      "info",
+    );
+  };
+
+  const promptForLLMIntegrationPreference = async (ctx: ExtensionContext): Promise<boolean> => {
+    if (!usingReflectedIntegration || disabled || llmIntegrationPreference != null) return false;
+    if (!ctx.hasUI) return false;
+    if (gatewayInfos.size > 0 && routingForNotice(ctx).managed.length === 0) return false;
+
+    const promptTitle = [
+      "Use exe.dev LLM integrations?",
+      "Automatically configure pi to use models from this VM's attached LLM integrations instead of configuring pi manually.",
+    ].join("\n");
+    const availableLabel = `[${availableIntegrationsLabel}]`;
+    const useLabel = `Use exe.dev LLM integration ${availableLabel}`;
+    const directLabel = "I'll configure pi myself";
+    const choice = await ctx.ui.select(promptTitle, [useLabel, directLabel]);
+    const decision = llmIntegrationPromptDecision(choice, useLabel, directLabel);
+
+    llmIntegrationPreference = decision.preference;
+    if (decision.persist) {
+      try {
+        writeLLMIntegrationPreference(LLM_INTEGRATION_PREFERENCE_FILE, llmIntegrationPreference);
+      } catch (err) {
+        ctx.ui.notify(`Could not save LLM routing preference: ${(err as Error).message}`, "warning");
+      }
+    }
+
+    await sync(ctx);
+    if (decision.selectDefaultModel) {
+      await selectDefaultInitialModel(ctx, llmIntegrationPreference);
+    } else if (decision.persist) {
+      ctx.ui.notify("Use /login to add credentials, then /model to select a model.", "info");
+    }
+    return true;
+  };
+
   // Surface routing once on startup/reload. Stay quiet in the common all-gateway
   // path, but notify when any gateway provider is bypassed by user config or
   // when the kill switch is active. Startup notifications are de-duped across
@@ -442,12 +532,16 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_start", async (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
     await sync(ctx);
+    const prompted = await promptForLLMIntegrationPreference(ctx);
+    if (prompted) return;
     if (!ctx.hasUI) return;
 
     const routing = routingForNotice(ctx);
     let message: string | undefined;
     if (disabled) {
       message = "exe.dev LLM routing disabled (EXE_DEV_DISABLE_GATEWAY); using your own provider credentials.";
+    } else if (usingReflectedIntegration && llmIntegrationPreference === "skip") {
+      message = `Using pi direct config instead of ${routeLabel}.`;
     } else if (routing.userConfig.length > 0) {
       const parts = [`Using your credentials/config for: ${routing.userConfig.join(", ")}.`];
       if (routing.managed.length > 0) {
@@ -468,6 +562,7 @@ export default async function (pi: ExtensionAPI) {
     const fingerprint = JSON.stringify({
       v: 1,
       disabled,
+      llmIntegrationPreference,
       managed: routing.managed,
       userCreds: routing.userConfig,
     });

@@ -56,7 +56,7 @@ test("applies ChatGPT rewrite only for marked generated model ids", () => {
   );
 });
 
-test("uses selected model id when Pi omits model from the outgoing payload", () => {
+test("uses selected model id when pi omits model from the outgoing payload", () => {
   assert.deepEqual(
     rewriteIntegrationProviderPayload(
       {
