@@ -362,4 +362,5 @@ RUN tic -x - < /tmp/xterm-ghostty.terminfo && rm /tmp/xterm-ghostty.terminfo
 EXPOSE 8000 9999
 
 LABEL "exe.dev/login-user"="exedev"
+LABEL "exe.dev/install-shelley"="true"
 CMD ["/usr/local/bin/init"]
