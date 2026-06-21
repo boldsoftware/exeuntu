@@ -38,11 +38,7 @@ import {
 // rewrites /gateway/llm/X to /_/gateway/X (exelet/metadata/metadata.go) and
 // forwards to the gateway, which serves the catalog at /_/gateway/models.json
 // before the credit check (llmgateway/gateway.go).
-const REFLECTION_INTEGRATIONS_URLS = [
-  "https://reflection.int.exe.xyz/integrations",
-  "https://reflection.int.exe.cloud/integrations",
-  "http://reflection.int.exe.cloud/integrations",
-];
+const REFLECTION_INTEGRATIONS_URL = "https://reflection.int.exe.xyz/integrations";
 const GATEWAY = "http://169.254.169.254/gateway/llm";
 const CATALOG_URL = `${GATEWAY}/models.json`;
 
@@ -341,7 +337,7 @@ export default async function (pi: ExtensionAPI) {
   let routeLabel = "exe.dev gateway";
   let availableIntegrationsLabel = routeLabel;
   const loaded = loadCatalogSync();
-  const discovered = await discoverIntegrationCatalogs(REFLECTION_INTEGRATIONS_URLS, (url) =>
+  const discovered = await discoverIntegrationCatalogs(REFLECTION_INTEGRATIONS_URL, (url) =>
     fetchJSONWithTimeout(url, FETCH_TIMEOUT_MS),
   );
   const usingReflectedIntegration = discovered.found;

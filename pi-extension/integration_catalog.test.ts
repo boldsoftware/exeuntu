@@ -8,11 +8,7 @@ import {
   type JSONFetcher,
 } from "./integration_catalog.ts";
 
-const reflectionURLs = [
-  "https://reflection.int.exe.xyz/integrations",
-  "https://reflection.int.exe.cloud/integrations",
-  "http://reflection.int.exe.cloud/integrations",
-];
+const reflectionURL = "https://reflection.int.exe.xyz/integrations";
 
 function openAIGPTModel(mode: "managed" | "chatgpt") {
   return {
@@ -36,7 +32,11 @@ test("discovers reflection integrations and model catalogs without serial catalo
     if (url.endsWith("/integrations")) {
       return {
         integrations: [
-          { type: "llm", name: "beta", help: "try https://beta-help.int.exe.xyz for models" },
+          {
+            type: "llm",
+            name: "beta",
+            help: "try https://beta-help.int.exe.xyz for models, not legacy https://beta.int.exe.cloud",
+          },
           { type: "llm", name: "alpha" },
           { type: "reflection", name: "ignore-me" },
         ],
@@ -52,7 +52,7 @@ test("discovers reflection integrations and model catalogs without serial catalo
     return undefined;
   };
 
-  const discovered = await discoverIntegrationCatalogs(reflectionURLs, fetchJSON);
+  const discovered = await discoverIntegrationCatalogs(reflectionURL, fetchJSON);
 
   assert.equal(discovered.found, true);
   assert.deepEqual(
@@ -61,6 +61,7 @@ test("discovers reflection integrations and model catalogs without serial catalo
   );
   assert.ok(fetched.includes("https://alpha.int.exe.xyz/models.json"));
   assert.ok(fetched.includes("https://beta-help.int.exe.xyz/models.json"));
+  assert.equal(fetched.some((url) => url.includes(".exe.cloud")), false);
   assert.ok(maxActiveCatalogFetches > 1, `catalog fetches were serial; max active was ${maxActiveCatalogFetches}`);
 });
 
@@ -71,7 +72,7 @@ test("keeps integration ownership when reflection succeeds but catalogs fail", a
     throw new Error("offline");
   };
 
-  const discovered = await discoverIntegrationCatalogs(reflectionURLs, fetchJSON, (message) => warnings.push(message));
+  const discovered = await discoverIntegrationCatalogs(reflectionURL, fetchJSON, (message) => warnings.push(message));
 
   assert.equal(discovered.found, true);
   assert.equal(discovered.integrations.length, 1);
@@ -100,7 +101,7 @@ test("discovers team llm integrations through team hosts", async () => {
     return undefined;
   };
 
-  const discovered = await discoverIntegrationCatalogs(reflectionURLs, fetchJSON);
+  const discovered = await discoverIntegrationCatalogs(reflectionURL, fetchJSON);
 
   assert.equal(discovered.found, true);
   assert.deepEqual(

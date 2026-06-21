@@ -163,37 +163,20 @@ function reflectionLLMIntegrations(reflection: unknown): ReflectionIntegration[]
 }
 
 async function fetchReflectionIntegrations(
-  urls: readonly string[],
+  url: string,
   fetchJSON: JSONFetcher,
   warn: WarnFn,
 ): Promise<ReflectionIntegration[]> {
-  const settled = await Promise.allSettled(
-    urls.map(async (url) => {
-      const reflection = await fetchJSON(url);
-      const integrations = reflectionLLMIntegrations(reflection);
-      if (!integrations) throw new Error(`${url} returned unrecognized reflection shape`);
-      return integrations;
-    }),
-  );
-  const byKey = new Map<string, ReflectionIntegration>();
-  let sawValidReflection = false;
-  let lastErr: unknown;
-  for (const result of settled) {
-    if (result.status === "fulfilled") {
-      sawValidReflection = true;
-      for (const integration of result.value) {
-        if (!integration.name) continue;
-        const key = `${integration.team === true ? "team" : "personal"}\0${integration.name}`;
-        if (!byKey.has(key)) byKey.set(key, integration);
-      }
-    } else {
-      lastErr = result.reason;
-    }
+  let integrations: ReflectionIntegration[] | undefined;
+  try {
+    const reflection = await fetchJSON(url);
+    integrations = reflectionLLMIntegrations(reflection);
+    if (!integrations) throw new Error(`${url} returned unrecognized reflection shape`);
+  } catch (err) {
+    warn(`[pi-exe-dev] LLM integration reflection fetch failed: ${(err as Error).message}`);
+    return [];
   }
-  if (!sawValidReflection && lastErr) {
-    warn(`[pi-exe-dev] LLM integration reflection fetch failed: ${(lastErr as Error).message}`);
-  }
-  return Array.from(byKey.values()).sort((a, b) => {
+  return integrations.sort((a, b) => {
     const byName = (a.name ?? "").localeCompare(b.name ?? "");
     if (byName !== 0) return byName;
     return Number(a.team === true) - Number(b.team === true);
@@ -216,9 +199,7 @@ function integrationBaseURLCandidates(integration: ReflectionIntegration): strin
       const url = new URL(match[0]);
       if (
         url.hostname.endsWith(".int.exe.xyz") ||
-        url.hostname.endsWith(".int.exe.cloud") ||
-        url.hostname.endsWith(".team.exe.xyz") ||
-        url.hostname.endsWith(".team.exe.cloud")
+        url.hostname.endsWith(".team.exe.xyz")
       ) {
         add(url.origin);
       }
@@ -230,12 +211,8 @@ function integrationBaseURLCandidates(integration: ReflectionIntegration): strin
   if (integration.name) {
     if (integration.team === true) {
       add(`https://${integration.name}.team.exe.xyz`);
-      add(`https://${integration.name}.team.exe.cloud`);
-      add(`http://${integration.name}.team.exe.cloud`);
     } else {
       add(`https://${integration.name}.int.exe.xyz`);
-      add(`https://${integration.name}.int.exe.cloud`);
-      add(`http://${integration.name}.int.exe.cloud`);
     }
   }
   return candidates;
@@ -274,11 +251,11 @@ async function fetchIntegrationCatalog(
 }
 
 export async function discoverIntegrationCatalogs(
-  reflectionURLs: readonly string[],
+  reflectionURL: string,
   fetchJSON: JSONFetcher,
   warn: WarnFn = console.warn,
 ): Promise<{ found: boolean; integrations: DiscoveredIntegration[] }> {
-  const llmIntegrations = await fetchReflectionIntegrations(reflectionURLs, fetchJSON, warn);
+  const llmIntegrations = await fetchReflectionIntegrations(reflectionURL, fetchJSON, warn);
   if (llmIntegrations.length === 0) return { found: false, integrations: [] };
   const integrations = await Promise.all(llmIntegrations.map((integration) => fetchIntegrationCatalog(integration, fetchJSON, warn)));
   return { found: true, integrations };
