@@ -23,6 +23,19 @@ function openAIGPTModel(mode: "managed" | "chatgpt") {
   };
 }
 
+function anthropicModel(id: string, name: string) {
+  return {
+    id: `anthropic/${id}`,
+    name,
+    provider: "anthropic",
+    native_id: id,
+    apis: ["anthropic_messages"],
+    limits: { context_window: 128000, max_output_tokens: 32000 },
+    architecture: { input_modalities: ["text"] },
+    exe_dev: { mode: "managed" },
+  };
+}
+
 test("discovers reflection integrations and model catalogs without serial catalog probing", async () => {
   let activeCatalogFetches = 0;
   let maxActiveCatalogFetches = 0;
@@ -161,6 +174,62 @@ test("preserves duplicate model names and marks ChatGPT rewrites by generated mo
   assert.equal(openai.chatGPTModelIds?.has("gpt-5.5@chatgpt-sub"), true);
   assert.equal(openai.chatGPTModelIds?.has("gpt-5.5"), false);
   assert.deepEqual(Array.from(openai.modelIds ?? []).sort(), ["gpt-5.5@chatgpt-sub", "gpt-5.5@managed-sub"]);
+});
+
+test("preserves reflected catalog model order for provider configs", () => {
+  const pricingCatalog: Catalog = {
+    schemaVersion: 1,
+    providers: [
+      {
+        id: "anthropic",
+        path: "anthropic",
+        models: [
+          {
+            id: "claude-opus-4-8",
+            name: "Claude Opus 4.8",
+            type: "chat",
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 32000,
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+          },
+          {
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            type: "chat",
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 32000,
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+          },
+        ],
+      },
+    ],
+  };
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: {
+          schema_version: 1,
+          models: [
+            anthropicModel("claude-opus-4-8", "Claude Opus 4.8"),
+            anthropicModel("claude-fable-5", "Claude Fable 5"),
+          ],
+        },
+      },
+    ],
+    pricingCatalog,
+    (message) => assert.fail(`unexpected warning: ${message}`),
+  );
+
+  const anthropic = infos.get("anthropic");
+  assert.ok(anthropic);
+  assert.deepEqual(
+    anthropic.config.models?.map((model) => model.id),
+    ["claude-opus-4-8@llm", "claude-fable-5@llm"],
+  );
 });
 
 test("warns once when integration pricing is absent", () => {

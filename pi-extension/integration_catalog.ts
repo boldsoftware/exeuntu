@@ -474,7 +474,7 @@ export function providerInfosFromIntegrationCatalogs(
       name: integrationProviderDisplayName(entry.names),
       baseUrl: first.baseUrl,
       apiKey: "integration",
-      models: models.sort((a, b) => a.id.localeCompare(b.id)),
+      models,
     };
     out.set(
       provider,
