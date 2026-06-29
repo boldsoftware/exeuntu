@@ -264,19 +264,6 @@ RUN chmod 644 /etc/systemd/system/exe-setup.service && \
 # It would be better if you could indicate that via an env variable or something.
 COPY init-wrapper.sh /usr/local/bin/init
 
-# Install native codex; installs to /usr/local/bin
-RUN ARCH=$(uname -m) && \
-    case ${ARCH} in \
-        x86_64) CODEX_ARCH="x86_64-unknown-linux-musl" ;; \
-        aarch64|arm64) CODEX_ARCH="aarch64-unknown-linux-musl" ;; \
-        *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
-    esac && \
-    CODEX_VERSION=$(curl -fsSL https://api.github.com/repos/openai/codex/releases/latest | jq -r '.tag_name') && \
-    curl -fsSL "https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-${CODEX_ARCH}.tar.gz" | \
-    tar -xzC /usr/local/bin && \
-    mv "/usr/local/bin/codex-${CODEX_ARCH}" /usr/local/bin/codex && \
-    chmod +x /usr/local/bin/codex
-
 # Create config directories for LLM agents
 RUN mkdir -p /home/exedev/.claude /home/exedev/.codex /home/exedev/.pi && \
     chown -R exedev:exedev /home/exedev/.claude /home/exedev/.codex /home/exedev/.pi
@@ -289,35 +276,27 @@ RUN chown exedev:exedev /home/exedev/.config/shelley/AGENTS.md && \
     ln -s /home/exedev/.config/shelley/AGENTS.md /home/exedev/.codex/AGENTS.md && \
     ln -s /home/exedev/.config/shelley/AGENTS.md /home/exedev/.pi/AGENTS.md
 
-# Install Claude to the native location (~/.local/bin) so auto-upgrades work correctly.
-# Symlink to /usr/local/bin for system-wide PATH access.
-RUN mkdir -p /home/exedev/.local/bin && \
-    ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') && \
-    PLATFORM="linux-${ARCH}" && \
-    STABLE_VERSION=$(curl -fsSL https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable) && \
-    EXPECTED_HASH=$(curl -fsSL "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${STABLE_VERSION}/manifest.json" | jq -r ".platforms[\"${PLATFORM}\"].checksum") && \
-    curl -fsSL "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${STABLE_VERSION}/${PLATFORM}/claude" -o /home/exedev/.local/bin/claude && \
-    echo "${EXPECTED_HASH}  /home/exedev/.local/bin/claude" | sha256sum -c - && \
-    chmod +x /home/exedev/.local/bin/claude && \
-    chown -R exedev:exedev /home/exedev/.local && \
-    ln -s /home/exedev/.local/bin/claude /usr/local/bin/claude
+# Install Claude and Codex through exeuntu's direct updaters.
+USER root
+RUN exeuntu update claude && \
+    test -x /usr/local/bin/claude && \
+    /usr/local/bin/claude --version
+RUN exeuntu update codex && \
+    test -x /usr/local/bin/codex && \
+    /usr/local/bin/codex --version
 
-# Install pi (pi-coding-agent) standalone binary
+# Install pi (pi-coding-agent) through exeuntu's updater.
 ARG PI_VERSION=
-RUN ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') && \
-    if [ -z "${PI_VERSION}" ]; then \
-        # Pi's updater follows the npm package. GitHub's latest release and
-        # latest/download URLs can lag behind, so resolve via npm and fetch the
-        # matching tagged GitHub asset. Revisit if upstream makes them agree.
-        PI_VERSION=$(curl -fsSL https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest | jq -r '.version'); \
+USER exedev
+RUN if [ -n "${PI_VERSION}" ]; then \
+        exeuntu update pi --home /home/exedev --version "${PI_VERSION}"; \
+    else \
+        exeuntu update pi --home /home/exedev; \
     fi && \
-    PI_TAG="v${PI_VERSION#v}" && \
-    curl -fsSL "https://github.com/earendil-works/pi/releases/download/${PI_TAG}/pi-linux-${ARCH}.tar.gz" | \
-    tar xz -C /home/exedev/.local/ && \
-    test "$(/home/exedev/.local/pi/pi --version)" = "${PI_TAG#v}" && \
-    ln -s /home/exedev/.local/pi/pi /home/exedev/.local/bin/pi && \
-    chown -R exedev:exedev /home/exedev/.local/pi && \
-    ln -s /home/exedev/.local/bin/pi /usr/local/bin/pi
+    test -x /home/exedev/.local/bin/pi && \
+    /home/exedev/.local/bin/pi --version
+USER root
+RUN ln -sf /home/exedev/.local/bin/pi /usr/local/bin/pi
 
 # Install pi exe.dev extension (LLM gateway + environment context).
 # Pre-fetch catalog.json so the first request Just Works immediately.
@@ -339,7 +318,7 @@ RUN ARCH=$(uname -m) && \
         aarch64|arm64) FD_ARCH="aarch64-unknown-linux-gnu" ;; \
         *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
     esac && \
-    FD_VERSION=$(curl -fsSL https://api.github.com/repos/sharkdp/fd/releases/latest | jq -r '.tag_name') && \
+    FD_VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/sharkdp/fd/releases/latest | sed 's|.*/tag/||') && \
     mkdir -p /home/exedev/.pi/agent/bin && \
     TMPDIR=$(mktemp -d) && \
     curl -fsSL "https://github.com/sharkdp/fd/releases/download/${FD_VERSION}/fd-${FD_VERSION}-${FD_ARCH}.tar.gz" | \

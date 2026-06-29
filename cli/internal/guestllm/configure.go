@@ -369,7 +369,7 @@ func codexConfig(integrationName, baseURL string) ([]byte, error) {
 		return nil, fmt.Errorf("codex base url: %w", err)
 	}
 	var b bytes.Buffer
-	b.WriteString("# Managed by exe.dev. Run `exeuntu codex configure` to refresh.\n")
+	b.WriteString("# Managed by exe.dev. Run `exeuntu configure codex` to refresh.\n")
 	fmt.Fprintf(&b, "model_provider = %s\n", quoteTOMLString(providerName))
 	b.WriteByte('\n')
 	fmt.Fprintf(&b, "[model_providers.%s]\n", quoteTOMLString(providerName))

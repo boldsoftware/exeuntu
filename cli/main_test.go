@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/boldsoftware/exe.dev/exeuntu/internal/agentupdate"
+	"github.com/boldsoftware/exe.dev/exeuntu/internal/piupdate"
 )
 
 func TestVersionPrintsStampedGitVersion(t *testing.T) {
@@ -96,8 +100,8 @@ func TestConfigureSubcommandsWriteSelectedClient(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			err := run([]string{
 				"exeuntu",
-				tc.command,
 				"configure",
+				tc.command,
 				"--home", home,
 			}, &stdout, &stderr)
 			if err != nil {
@@ -138,8 +142,8 @@ func TestConfigureSubcommandSelectsIntegration(t *testing.T) {
 
 	err := run([]string{
 		"exeuntu",
-		"codex",
 		"configure",
+		"codex",
 		"--home", home,
 		"--integration", "otherllm",
 	}, &stdout, &stderr)
@@ -160,16 +164,8 @@ func TestUsageExposesConfigureShape(t *testing.T) {
 	if err := run([]string{"exeuntu", "help"}, &stdout, &stderr); err != nil {
 		t.Fatalf("help: %v", err)
 	}
-	if got := stdout.String(); !strings.Contains(got, "codex") || !strings.Contains(got, "claude") {
-		t.Fatalf("help missing configure commands:\n%s", got)
-	}
-	for _, want := range []string{
-		"configure Codex to use the LLM integration",
-		"configure Claude Code to use the LLM integration",
-	} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Fatalf("help missing %q:\n%s", want, stdout.String())
-		}
+	if got := stdout.String(); !strings.Contains(got, "configure") {
+		t.Fatalf("help missing configure command:\n%s", got)
 	}
 	if strings.Contains(stdout.String(), "llm") || strings.Contains(stdout.String(), "configure codex") || strings.Contains(stdout.String(), "sync") || strings.Contains(stdout.String(), "llm-client") {
 		t.Fatalf("help still exposes removed command:\n%s", stdout.String())
@@ -186,34 +182,24 @@ func TestUsageExposesConfigureShape(t *testing.T) {
 			want: "usage: exeuntu <command>",
 		},
 		{
-			name: "codex help command",
-			args: []string{"exeuntu", "codex", "help"},
-			want: "usage: exeuntu codex <command>",
+			name: "configure help command",
+			args: []string{"exeuntu", "configure", "help"},
+			want: "usage: exeuntu configure <agent>",
 		},
 		{
-			name: "codex help flag",
-			args: []string{"exeuntu", "codex", "--help"},
-			want: "usage: exeuntu codex <command>",
+			name: "configure help flag",
+			args: []string{"exeuntu", "configure", "--help"},
+			want: "usage: exeuntu configure <agent>",
 		},
 		{
-			name: "claude help command",
-			args: []string{"exeuntu", "claude", "help"},
-			want: "usage: exeuntu claude <command>",
+			name: "configure codex help flag",
+			args: []string{"exeuntu", "configure", "codex", "--help"},
+			want: "usage: exeuntu configure codex [options]",
 		},
 		{
-			name: "claude help flag",
-			args: []string{"exeuntu", "claude", "--help"},
-			want: "usage: exeuntu claude <command>",
-		},
-		{
-			name: "codex help flag",
-			args: []string{"exeuntu", "codex", "configure", "--help"},
-			want: "usage: exeuntu codex configure [options]",
-		},
-		{
-			name: "claude help flag",
-			args: []string{"exeuntu", "claude", "configure", "--help"},
-			want: "usage: exeuntu claude configure [options]",
+			name: "configure claude help flag",
+			args: []string{"exeuntu", "configure", "claude", "--help"},
+			want: "usage: exeuntu configure claude [options]",
 		},
 	}
 	for _, tc := range helpCases {
@@ -226,11 +212,21 @@ func TestUsageExposesConfigureShape(t *testing.T) {
 			if !strings.Contains(stdout.String(), tc.want) {
 				t.Fatalf("stdout = %q, want %q", stdout.String(), tc.want)
 			}
-			if strings.Contains(tc.want, "[options]") && !strings.Contains(stdout.String(), "-integration string") {
+			if strings.Contains(tc.want, "configure [options]") && !strings.Contains(stdout.String(), "-integration string") {
 				t.Fatalf("stdout missing integration option:\n%s", stdout.String())
 			}
 			if strings.Contains(tc.want, "<command>") && !strings.Contains(stdout.String(), "to use the LLM integration") {
 				t.Fatalf("stdout missing LLM integration wording:\n%s", stdout.String())
+			}
+			if strings.Contains(tc.want, "<agent>") {
+				for _, want := range []string{
+					"configure Codex to use the LLM integration",
+					"configure Claude Code to use the LLM integration",
+				} {
+					if !strings.Contains(stdout.String(), want) {
+						t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+					}
+				}
 			}
 			if stderr.Len() != 0 {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -239,13 +235,13 @@ func TestUsageExposesConfigureShape(t *testing.T) {
 	}
 }
 
-func TestUsageExposesPiUpdateShape(t *testing.T) {
+func TestUsageExposesUpdateShape(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"exeuntu", "help"}, &stdout, &stderr); err != nil {
 		t.Fatalf("help: %v", err)
 	}
-	if got := stdout.String(); !strings.Contains(got, "pi") {
-		t.Fatalf("help missing pi command:\n%s", got)
+	if got := stdout.String(); !strings.Contains(got, "update") {
+		t.Fatalf("help missing update command:\n%s", got)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -257,19 +253,29 @@ func TestUsageExposesPiUpdateShape(t *testing.T) {
 		want string
 	}{
 		{
-			name: "pi help command",
-			args: []string{"exeuntu", "pi", "help"},
-			want: "usage: exeuntu pi <command>",
+			name: "update help command",
+			args: []string{"exeuntu", "update", "help"},
+			want: "usage: exeuntu update <agent>",
 		},
 		{
-			name: "pi help flag",
-			args: []string{"exeuntu", "pi", "--help"},
-			want: "usage: exeuntu pi <command>",
+			name: "update help flag",
+			args: []string{"exeuntu", "update", "--help"},
+			want: "usage: exeuntu update <agent>",
 		},
 		{
-			name: "pi update help flag",
-			args: []string{"exeuntu", "pi", "update", "--help"},
-			want: "usage: exeuntu pi update [options]",
+			name: "update claude help flag",
+			args: []string{"exeuntu", "update", "claude", "--help"},
+			want: "usage: exeuntu update claude [options]",
+		},
+		{
+			name: "update codex help flag",
+			args: []string{"exeuntu", "update", "codex", "--help"},
+			want: "usage: exeuntu update codex [options]",
+		},
+		{
+			name: "update pi help flag",
+			args: []string{"exeuntu", "update", "pi", "--help"},
+			want: "usage: exeuntu update pi [options]",
 		},
 	}
 	for _, tc := range helpCases {
@@ -282,8 +288,144 @@ func TestUsageExposesPiUpdateShape(t *testing.T) {
 			if !strings.Contains(stdout.String(), tc.want) {
 				t.Fatalf("stdout = %q, want %q", stdout.String(), tc.want)
 			}
-			if tc.name == "pi update help flag" && !strings.Contains(stdout.String(), "-version string") {
+			if strings.Contains(tc.want, "update ") && strings.Contains(tc.want, "[options]") && !strings.Contains(stdout.String(), "-version string") {
 				t.Fatalf("stdout missing version option:\n%s", stdout.String())
+			}
+			if tc.name == "update pi help flag" && !strings.Contains(stdout.String(), "-home string") {
+				t.Fatalf("stdout missing home option:\n%s", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestUsageExposesInstallShape(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"exeuntu", "help"}, &stdout, &stderr); err != nil {
+		t.Fatalf("help: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "install") {
+		t.Fatalf("help missing install command:\n%s", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	helpCases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "install help command",
+			args: []string{"exeuntu", "install", "help"},
+			want: "usage: exeuntu install <agent>",
+		},
+		{
+			name: "install help flag",
+			args: []string{"exeuntu", "install", "--help"},
+			want: "usage: exeuntu install <agent>",
+		},
+		{
+			name: "install claude help flag",
+			args: []string{"exeuntu", "install", "claude", "--help"},
+			want: "usage: exeuntu install claude [options]",
+		},
+		{
+			name: "install codex help flag",
+			args: []string{"exeuntu", "install", "codex", "--help"},
+			want: "usage: exeuntu install codex [options]",
+		},
+		{
+			name: "install pi help flag",
+			args: []string{"exeuntu", "install", "pi", "--help"},
+			want: "usage: exeuntu install pi [options]",
+		},
+	}
+	for _, tc := range helpCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			if err := run(tc.args, &stdout, &stderr); err != nil {
+				t.Fatalf("run %v: %v", tc.args, err)
+			}
+			if !strings.Contains(stdout.String(), tc.want) {
+				t.Fatalf("stdout = %q, want %q", stdout.String(), tc.want)
+			}
+			if strings.Contains(tc.want, "install ") && strings.Contains(tc.want, "[options]") && !strings.Contains(stdout.String(), "-version string") {
+				t.Fatalf("stdout missing version option:\n%s", stdout.String())
+			}
+			if tc.name == "install pi help flag" && !strings.Contains(stdout.String(), "-home string") {
+				t.Fatalf("stdout missing home option:\n%s", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestUpdateCommandsAreSilentOnSuccess(t *testing.T) {
+	withAgentUpdater(t, func(_ context.Context, opts agentupdate.Options) (agentupdate.Result, error) {
+		if opts.Stdout != nil {
+			fmt.Fprintln(opts.Stdout, "agent output")
+		}
+		return agentupdate.Result{Agent: opts.Agent, Version: "test-version", Path: "test-path"}, nil
+	})
+	withPiUpdater(t, func(_ context.Context, opts piupdate.Options) (piupdate.Result, error) {
+		if opts.Stdout != nil {
+			fmt.Fprintln(opts.Stdout, "pi output")
+		}
+		return piupdate.Result{Version: "test-version", Path: "test-path"}, nil
+	})
+
+	for _, args := range [][]string{
+		{"exeuntu", "update", "claude"},
+		{"exeuntu", "update", "codex"},
+		{"exeuntu", "update", "pi"},
+	} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(args, &stdout, &stderr); err != nil {
+				t.Fatalf("run %v: %v", args, err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestInstallCommandsShowUpdaterOutput(t *testing.T) {
+	withAgentUpdater(t, func(_ context.Context, opts agentupdate.Options) (agentupdate.Result, error) {
+		fmt.Fprintln(opts.Stdout, "agent output")
+		return agentupdate.Result{Agent: opts.Agent, Version: "test-version", Path: "test-path"}, nil
+	})
+	withPiUpdater(t, func(_ context.Context, opts piupdate.Options) (piupdate.Result, error) {
+		fmt.Fprintln(opts.Stdout, "pi output")
+		return piupdate.Result{Version: "test-version", Path: "test-path"}, nil
+	})
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"exeuntu", "install", "claude"}, want: "agent output\n"},
+		{args: []string{"exeuntu", "install", "codex"}, want: "agent output\n"},
+		{args: []string{"exeuntu", "install", "pi"}, want: "pi output\n"},
+	} {
+		t.Run(strings.Join(tc.args[1:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := run(tc.args, &stdout, &stderr); err != nil {
+				t.Fatalf("run %v: %v", tc.args, err)
+			}
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("stdout = %q, want %q", got, tc.want)
 			}
 			if stderr.Len() != 0 {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -295,9 +437,9 @@ func TestUsageExposesPiUpdateShape(t *testing.T) {
 func TestBareCommandGroupsPrintUsageWithoutDiagnostic(t *testing.T) {
 	for _, args := range [][]string{
 		{"exeuntu"},
-		{"exeuntu", "codex"},
-		{"exeuntu", "claude"},
-		{"exeuntu", "pi"},
+		{"exeuntu", "configure"},
+		{"exeuntu", "install"},
+		{"exeuntu", "update"},
 	} {
 		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -312,10 +454,35 @@ func TestBareCommandGroupsPrintUsageWithoutDiagnostic(t *testing.T) {
 			if !strings.Contains(got, "usage:") {
 				t.Fatalf("stderr missing usage:\n%s", got)
 			}
-			for _, unwanted := range []string{"missing command", "missing codex command", "missing claude command", "missing pi command"} {
+			for _, unwanted := range []string{"missing command", "missing configure command", "missing install command", "missing update command"} {
 				if strings.Contains(got, unwanted) {
 					t.Fatalf("stderr contains diagnostic %q:\n%s", unwanted, got)
 				}
+			}
+		})
+	}
+}
+
+func TestReplacedUpdateCommandsAreNotExposed(t *testing.T) {
+	for _, args := range [][]string{
+		{"exeuntu", "codex", "update", "--help"},
+		{"exeuntu", "claude", "update", "--help"},
+		{"exeuntu", "pi", "--help"},
+		{"exeuntu", "pi", "update", "--help"},
+	} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := run(args, &stdout, &stderr)
+			if err == nil {
+				t.Fatal("replaced update command succeeded, want error")
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if got := stderr.String(); strings.Contains(got, "usage: exeuntu codex update") ||
+				strings.Contains(got, "usage: exeuntu claude update") ||
+				strings.Contains(got, "usage: exeuntu pi update") {
+				t.Fatalf("stderr exposes replaced updater usage:\n%s", got)
 			}
 		})
 	}
@@ -327,7 +494,10 @@ func TestRemovedConfigureCommandsAreNotExposed(t *testing.T) {
 		{"exeuntu", "llm", "configure", "all"},
 		{"exeuntu", "llm", "configure", "codex"},
 		{"exeuntu", "llm", "configure", "claude"},
-		{"exeuntu", "configure", "codex"},
+		{"exeuntu", "codex", "--help"},
+		{"exeuntu", "codex", "configure", "--help"},
+		{"exeuntu", "claude", "--help"},
+		{"exeuntu", "claude", "configure", "--help"},
 	} {
 		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -338,8 +508,11 @@ func TestRemovedConfigureCommandsAreNotExposed(t *testing.T) {
 			if stdout.Len() != 0 {
 				t.Fatalf("stdout = %q, want empty", stdout.String())
 			}
-			if got := stderr.String(); !strings.Contains(got, "usage: exeuntu <command>") || strings.Contains(got, "llm") || strings.Contains(got, "configure codex") {
-				t.Fatalf("stderr = %q, want top-level usage without removed commands", got)
+			if got := stderr.String(); strings.Contains(got, "usage: exeuntu codex configure") ||
+				strings.Contains(got, "usage: exeuntu claude configure") ||
+				strings.Contains(got, "usage: exeuntu codex <command>") ||
+				strings.Contains(got, "usage: exeuntu claude <command>") {
+				t.Fatalf("stderr exposes replaced configure usage:\n%s", got)
 			}
 		})
 	}
@@ -351,6 +524,24 @@ func withGitVersion(t *testing.T, version string) {
 	gitVersion = version
 	t.Cleanup(func() {
 		gitVersion = old
+	})
+}
+
+func withAgentUpdater(t *testing.T, fn func(context.Context, agentupdate.Options) (agentupdate.Result, error)) {
+	t.Helper()
+	old := updateAgent
+	updateAgent = fn
+	t.Cleanup(func() {
+		updateAgent = old
+	})
+}
+
+func withPiUpdater(t *testing.T, fn func(context.Context, piupdate.Options) (piupdate.Result, error)) {
+	t.Helper()
+	old := updatePi
+	updatePi = fn
+	t.Cleanup(func() {
+		updatePi = old
 	})
 }
 

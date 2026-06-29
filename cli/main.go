@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boldsoftware/exe.dev/exeuntu/internal/agentupdate"
 	"github.com/boldsoftware/exe.dev/exeuntu/internal/guestllm"
 	"github.com/boldsoftware/exe.dev/exeuntu/internal/piupdate"
 	"github.com/urfave/cli/v3"
@@ -21,6 +22,11 @@ const appName = "exeuntu"
 var gitVersion = "unknown"
 
 var errUsage = errors.New("usage")
+
+var (
+	updateAgent = agentupdate.Update
+	updatePi    = piupdate.Update
+)
 
 func main() {
 	if err := run(os.Args, os.Stdout, os.Stderr); err != nil {
@@ -73,9 +79,9 @@ func newRootCommand(stdout, stderr io.Writer) *cli.Command {
 		ErrWriter:                     stderr,
 		CustomRootCommandHelpTemplate: rootHelpTemplate,
 		Commands: []*cli.Command{
-			llmClientCommand("claude", "configure Claude Code to use the LLM integration", guestllm.ClientClaudeCode),
-			llmClientCommand("codex", "configure Codex to use the LLM integration", guestllm.ClientCodex),
-			piCommand(),
+			configureCommand(),
+			installCommand(),
+			updateCommand(),
 			versionCommand(),
 		},
 		OnUsageError: usageErrorHandler,
@@ -125,14 +131,15 @@ func versionCommand() *cli.Command {
 	}
 }
 
-func llmClientCommand(commandName, usage, client string) *cli.Command {
+func configureCommand() *cli.Command {
 	return &cli.Command{
-		Name:               commandName,
-		Usage:              usage,
-		UsageText:          "exeuntu " + commandName + " <command>",
+		Name:               "configure",
+		Usage:              "configure coding agents to use the LLM integration",
+		UsageText:          "exeuntu configure <agent>",
 		CustomHelpTemplate: commandGroupHelpTemplate,
 		Commands: []*cli.Command{
-			configureClientCommand(commandName, client),
+			configureClientCommand("claude", guestllm.ClientClaudeCode),
+			configureClientCommand("codex", guestllm.ClientCodex),
 		},
 		OnUsageError: usageErrorHandler,
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -144,9 +151,9 @@ func llmClientCommand(commandName, usage, client string) *cli.Command {
 
 func configureClientCommand(commandName, client string) *cli.Command {
 	return &cli.Command{
-		Name:               "configure",
+		Name:               commandName,
 		Usage:              llmConfigureUsage(commandName),
-		UsageText:          "exeuntu " + commandName + " configure [options]",
+		UsageText:          "exeuntu configure " + commandName + " [options]",
 		CustomHelpTemplate: leafHelpTemplate,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -182,6 +189,33 @@ func configureClientCommand(commandName, client string) *cli.Command {
 	}
 }
 
+func updateCommand() *cli.Command {
+	return agentInstallerCommandGroup("update", "update installed coding agents")
+}
+
+func installCommand() *cli.Command {
+	return agentInstallerCommandGroup("install", "install coding agents")
+}
+
+func agentInstallerCommandGroup(commandName, usage string) *cli.Command {
+	return &cli.Command{
+		Name:               commandName,
+		Usage:              usage,
+		UsageText:          "exeuntu " + commandName + " <agent>",
+		CustomHelpTemplate: commandGroupHelpTemplate,
+		Commands: []*cli.Command{
+			agentInstallerCommand(commandName, agentupdate.AgentClaude, commandName+" Claude Code", "Claude Code version to install instead of latest"),
+			agentInstallerCommand(commandName, agentupdate.AgentCodex, commandName+" Codex", "Codex release version to install instead of latest"),
+			piInstallerCommand(commandName),
+		},
+		OnUsageError: usageErrorHandler,
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			showUsage(cmd, cmd.Root().ErrWriter)
+			return errUsage
+		},
+	}
+}
+
 func llmConfigureUsage(commandName string) string {
 	switch commandName {
 	case "codex":
@@ -193,28 +227,41 @@ func llmConfigureUsage(commandName string) string {
 	}
 }
 
-func piCommand() *cli.Command {
+func agentInstallerCommand(commandName string, agent agentupdate.Agent, usage, versionUsage string) *cli.Command {
 	return &cli.Command{
-		Name:               "pi",
-		Usage:              "manage Pi coding agent",
-		UsageText:          "exeuntu pi <command>",
-		CustomHelpTemplate: commandGroupHelpTemplate,
-		Commands: []*cli.Command{
-			piUpdateCommand(),
+		Name:               string(agent),
+		Usage:              usage,
+		UsageText:          "exeuntu " + commandName + " " + string(agent) + " [options]",
+		CustomHelpTemplate: leafHelpTemplate,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:   "version",
+				Usage:  versionUsage,
+				Config: cli.StringConfig{TrimSpace: true},
+			},
 		},
 		OnUsageError: usageErrorHandler,
-		Action: func(_ context.Context, cmd *cli.Command) error {
-			showUsage(cmd, cmd.Root().ErrWriter)
-			return errUsage
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if err := rejectArgs(cmd); err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+			_, err := updateAgent(ctx, agentupdate.Options{
+				Agent:   agent,
+				Version: cmd.String("version"),
+				Stdout:  installerStdout(commandName, cmd),
+			})
+			return err
 		},
 	}
 }
 
-func piUpdateCommand() *cli.Command {
+func piInstallerCommand(commandName string) *cli.Command {
 	return &cli.Command{
-		Name:               "update",
-		Usage:              "update Pi coding agent",
-		UsageText:          "exeuntu pi update [options]",
+		Name:               "pi",
+		Usage:              commandName + " Pi coding agent",
+		UsageText:          "exeuntu " + commandName + " pi [options]",
 		CustomHelpTemplate: leafHelpTemplate,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -234,14 +281,21 @@ func piUpdateCommand() *cli.Command {
 			}
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
-			_, err := piupdate.Update(ctx, piupdate.Options{
+			_, err := updatePi(ctx, piupdate.Options{
 				HomeDir: strings.TrimSpace(cmd.String("home")),
 				Version: cmd.String("version"),
-				Stdout:  cmd.Root().Writer,
+				Stdout:  installerStdout(commandName, cmd),
 			})
 			return err
 		},
 	}
+}
+
+func installerStdout(commandName string, cmd *cli.Command) io.Writer {
+	if commandName == "update" {
+		return nil
+	}
+	return cmd.Root().Writer
 }
 
 func rejectArgs(cmd *cli.Command) error {
