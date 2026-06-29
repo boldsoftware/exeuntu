@@ -106,7 +106,7 @@ type CompatBag = {
 
 export type JSONFetcher = (url: string) => Promise<unknown | undefined>;
 
-// Keep in lockstep with llmpricing.CatalogSchemaVersion. Any breaking change
+// Keep in lockstep with llmcatalog.CatalogSchemaVersion. Any breaking change
 // there requires shipping a new exe-dev pi extension that knows the new shape;
 // until then the extension treats the catalog as unavailable and falls back.
 export const SCHEMA_VERSION = 1;
@@ -562,7 +562,7 @@ function chatModelsWithFullMetadata(p: CatalogProvider): ProviderModelConfig[] {
 // configFromCatalogProvider builds the gateway provider config from the
 // catalog. p.id must be one of pi-ai's KnownProvider names (anthropic, openai,
 // fireworks, ...) because pi merges its built-in catalog by provider name; the
-// Go-side providerCatalog in llmpricing/pricing.go is the source of truth for
+// Go-side providerCatalog in llmcatalog/pricing.go is the source of truth for
 // these IDs.
 export function configFromCatalogProvider(p: CatalogProvider, gatewayBaseURL: string): ProviderConfig {
   const path = p.path.replace(/^\/+/, "");
