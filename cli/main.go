@@ -39,12 +39,6 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	oldSubcommandHelpTemplate := cli.SubcommandHelpTemplate
-	cli.SubcommandHelpTemplate = commandGroupHelpTemplate
-	defer func() {
-		cli.SubcommandHelpTemplate = oldSubcommandHelpTemplate
-	}()
-
 	return newRootCommand(stdout, stderr).Run(context.Background(), normalizeArgs(args))
 }
 
@@ -72,12 +66,12 @@ type versionInfo struct {
 
 func newRootCommand(stdout, stderr io.Writer) *cli.Command {
 	return &cli.Command{
-		Name:                          appName,
-		UsageText:                     "exeuntu <command>",
-		HideVersion:                   true,
-		Writer:                        stdout,
-		ErrWriter:                     stderr,
-		CustomRootCommandHelpTemplate: rootHelpTemplate,
+		Name:        appName,
+		Usage:       "manage exeuntu guest tooling",
+		UsageText:   "exeuntu <command>",
+		HideVersion: true,
+		Writer:      stdout,
+		ErrWriter:   stderr,
 		Commands: []*cli.Command{
 			configureCommand(),
 			installCommand(),
@@ -103,10 +97,9 @@ func normalizeArgs(args []string) []string {
 
 func versionCommand() *cli.Command {
 	return &cli.Command{
-		Name:               "version",
-		Usage:              "print git version",
-		UsageText:          "exeuntu version [options]",
-		CustomHelpTemplate: leafHelpTemplate,
+		Name:      "version",
+		Usage:     "print git version",
+		UsageText: "exeuntu version [options]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "json",
@@ -133,10 +126,9 @@ func versionCommand() *cli.Command {
 
 func configureCommand() *cli.Command {
 	return &cli.Command{
-		Name:               "configure",
-		Usage:              "configure coding agents to use the LLM integration",
-		UsageText:          "exeuntu configure <agent>",
-		CustomHelpTemplate: commandGroupHelpTemplate,
+		Name:      "configure",
+		Usage:     "configure coding agents to use the LLM integration",
+		UsageText: "exeuntu configure <agent>",
 		Commands: []*cli.Command{
 			configureClientCommand("claude", guestllm.ClientClaudeCode),
 			configureClientCommand("codex", guestllm.ClientCodex),
@@ -151,10 +143,9 @@ func configureCommand() *cli.Command {
 
 func configureClientCommand(commandName, client string) *cli.Command {
 	return &cli.Command{
-		Name:               commandName,
-		Usage:              llmConfigureUsage(commandName),
-		UsageText:          "exeuntu configure " + commandName + " [options]",
-		CustomHelpTemplate: leafHelpTemplate,
+		Name:      commandName,
+		Usage:     llmConfigureUsage(commandName),
+		UsageText: "exeuntu configure " + commandName + " [options]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "home",
@@ -199,10 +190,9 @@ func installCommand() *cli.Command {
 
 func agentInstallerCommandGroup(commandName, usage string) *cli.Command {
 	return &cli.Command{
-		Name:               commandName,
-		Usage:              usage,
-		UsageText:          "exeuntu " + commandName + " <agent>",
-		CustomHelpTemplate: commandGroupHelpTemplate,
+		Name:      commandName,
+		Usage:     usage,
+		UsageText: "exeuntu " + commandName + " <agent>",
 		Commands: []*cli.Command{
 			agentInstallerCommand(commandName, agentupdate.AgentClaude, commandName+" Claude Code", "Claude Code version to install instead of latest"),
 			agentInstallerCommand(commandName, agentupdate.AgentCodex, commandName+" Codex", "Codex release version to install instead of latest"),
@@ -229,10 +219,9 @@ func llmConfigureUsage(commandName string) string {
 
 func agentInstallerCommand(commandName string, agent agentupdate.Agent, usage, versionUsage string) *cli.Command {
 	return &cli.Command{
-		Name:               string(agent),
-		Usage:              usage,
-		UsageText:          "exeuntu " + commandName + " " + string(agent) + " [options]",
-		CustomHelpTemplate: leafHelpTemplate,
+		Name:      string(agent),
+		Usage:     usage,
+		UsageText: "exeuntu " + commandName + " " + string(agent) + " [options]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:   "version",
@@ -259,10 +248,9 @@ func agentInstallerCommand(commandName string, agent agentupdate.Agent, usage, v
 
 func piInstallerCommand(commandName string) *cli.Command {
 	return &cli.Command{
-		Name:               "pi",
-		Usage:              commandName + " Pi coding agent",
-		UsageText:          "exeuntu " + commandName + " pi [options]",
-		CustomHelpTemplate: leafHelpTemplate,
+		Name:      "pi",
+		Usage:     commandName + " Pi coding agent",
+		UsageText: "exeuntu " + commandName + " pi [options]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "home",
@@ -323,27 +311,12 @@ func showUsage(cmd *cli.Command, out io.Writer) {
 	switch {
 	case cmd == root:
 		_ = cli.ShowRootCommandHelp(root)
-	case len(cmd.VisibleCommands()) > 0:
-		cli.HelpPrinter(root.Writer, commandGroupHelpTemplate, cmd)
 	default:
-		cli.HelpPrinter(root.Writer, leafHelpTemplate, cmd)
+		lineage := cmd.Lineage()
+		if len(lineage) > 1 {
+			_ = cli.ShowCommandHelp(context.Background(), lineage[1], cmd.Name)
+			return
+		}
+		_ = cli.ShowRootCommandHelp(root)
 	}
 }
-
-const rootHelpTemplate = `usage: {{.UsageText}}
-
-commands:{{range .VisibleCommands}}{{if ne .Name "help"}}
-  {{printf "%-8s" .Name}}{{.Usage}}{{end}}{{end}}
-`
-
-const commandGroupHelpTemplate = `usage: {{.UsageText}}
-
-commands:{{range .VisibleCommands}}{{if ne .Name "help"}}
-  {{printf "%-11s" .Name}}{{.Usage}}{{end}}{{end}}
-`
-
-const leafHelpTemplate = `usage: {{.UsageText}}
-
-options:{{range .VisibleFlags}}{{if ne (index .Names 0) "help"}}
-  {{.}}{{end}}{{end}}
-`
