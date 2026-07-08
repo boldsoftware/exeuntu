@@ -2,7 +2,7 @@
 FROM docker.io/chromedp/headless-shell:stable AS chrome
 
 # Build the guest-facing exeuntu helper.
-FROM docker.io/library/golang:1.26.4 AS exeuntu-cli
+FROM docker.io/library/golang:1.26.5 AS exeuntu-cli
 ARG EXEUNTU_GIT_VERSION=unknown
 WORKDIR /src/exeuntu-cli
 COPY cli/ ./
