@@ -65,9 +65,6 @@ export function rewriteIntegrationProviderPayload(
     changed = true;
   }
   if (requestModelID && opts.chatGPTModelIds?.has(requestModelID)) {
-    delete out.max_output_tokens;
-    delete out.max_tokens;
-    delete out.max_completion_tokens;
     out.store = false;
     moveInstructionInputToInstructions(out);
     changed = true;
