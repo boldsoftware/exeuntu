@@ -47,6 +47,10 @@ test("applies ChatGPT rewrite only for marked generated model ids", () => {
       max_tokens: 100,
       max_completion_tokens: 100,
       store: false,
+      text: { verbosity: "low" },
+      include: ["reasoning.encrypted_content"],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
     },
   );
 
@@ -76,6 +80,38 @@ test("uses selected model id when pi omits model from the outgoing payload", () 
       input: [{ role: "user", content: "hi" }],
       instructions: "developer text\n\nsystem text",
       max_output_tokens: 100,
+      store: false,
+      text: { verbosity: "low" },
+      include: ["reasoning.encrypted_content"],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    },
+  );
+});
+
+test("preserves explicit Codex payload options for ChatGPT models", () => {
+  assert.deepEqual(
+    rewriteIntegrationProviderPayload(
+      {
+        model: "gpt-5.5@chatgpt-sub",
+        input: "hi",
+        text: { verbosity: "high" },
+        include: ["file_search_call.results"],
+        tool_choice: "required",
+        parallel_tool_calls: false,
+      },
+      {
+        modelAliases: new Map([["gpt-5.5@chatgpt-sub", "gpt-5.5"]]),
+        chatGPTModelIds: new Set(["gpt-5.5@chatgpt-sub"]),
+      },
+    ),
+    {
+      model: "gpt-5.5",
+      input: "hi",
+      text: { verbosity: "high" },
+      include: ["file_search_call.results", "reasoning.encrypted_content"],
+      tool_choice: "required",
+      parallel_tool_calls: false,
       store: false,
     },
   );

@@ -51,6 +51,24 @@ function moveInstructionInputToInstructions(payload: Record<string, unknown>): v
   payload.input = input;
 }
 
+function applyChatGPTCodexDefaults(payload: Record<string, unknown>): void {
+  payload.store = false;
+  moveInstructionInputToInstructions(payload);
+
+  const text = payload.text;
+  payload.text =
+    text && typeof text === "object" && !Array.isArray(text)
+      ? { verbosity: "low", ...(text as Record<string, unknown>) }
+      : { verbosity: "low" };
+
+  const include = Array.isArray(payload.include) ? [...payload.include] : [];
+  if (!include.includes("reasoning.encrypted_content")) include.push("reasoning.encrypted_content");
+  payload.include = include;
+
+  if (payload.tool_choice === undefined) payload.tool_choice = "auto";
+  if (payload.parallel_tool_calls === undefined) payload.parallel_tool_calls = true;
+}
+
 export function rewriteIntegrationProviderPayload(
   payload: unknown,
   opts: IntegrationProviderPayloadRewrite,
@@ -65,8 +83,7 @@ export function rewriteIntegrationProviderPayload(
     changed = true;
   }
   if (requestModelID && opts.chatGPTModelIds?.has(requestModelID)) {
-    out.store = false;
-    moveInstructionInputToInstructions(out);
+    applyChatGPTCodexDefaults(out);
     changed = true;
   }
   return changed ? out : undefined;
