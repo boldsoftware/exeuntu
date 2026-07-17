@@ -302,9 +302,9 @@ RUN if [ -n "${PI_VERSION}" ]; then \
 USER root
 RUN ln -sf /home/exedev/.local/bin/pi /usr/local/bin/pi
 
-# Install pi exe.dev extension (LLM gateway + environment context).
-# Pre-fetch catalog.json so the first request Just Works immediately.
-# Each subsequent pi run will update the catalog.
+# Install the pi exe.dev extension (LLM integration + environment context).
+# The bundled public catalog supplies pricing and compatibility metadata only;
+# reflection-discovered integrations supply every model and provider route.
 COPY pi-extension/ /home/exedev/.pi/agent/extensions/exe-dev/
 RUN curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --max-time 30 \
       https://exe.dev/llm-gateway-models.json \

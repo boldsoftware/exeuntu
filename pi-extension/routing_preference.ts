@@ -19,6 +19,13 @@ export function llmIntegrationPromptDecision(
   return { preference: "skip", persist: false, selectDefaultModel: false };
 }
 
+export function shouldRegisterLLMIntegrations(
+  preference: LLMIntegrationPreference | undefined,
+  disabled: boolean,
+): boolean {
+  return !disabled && preference !== "skip";
+}
+
 export function parseLLMIntegrationPreference(value: unknown): LLMIntegrationPreference | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const useExeIntegration = (value as { useExeIntegration?: unknown }).useExeIntegration;

@@ -7,6 +7,7 @@ import {
   llmIntegrationPromptDecision,
   parseLLMIntegrationPreference,
   readLLMIntegrationPreference,
+  shouldRegisterLLMIntegrations,
   writeLLMIntegrationPreference,
 } from "./routing_preference.ts";
 
@@ -26,6 +27,14 @@ test("maps llm integration prompt choices to session and persisted behavior", ()
     persist: false,
     selectDefaultModel: false,
   });
+});
+
+test("makes llm integrations available until the user explicitly opts out", () => {
+  assert.equal(shouldRegisterLLMIntegrations("use", false), true);
+  assert.equal(shouldRegisterLLMIntegrations("skip", false), false);
+  assert.equal(shouldRegisterLLMIntegrations(undefined, false), true);
+  assert.equal(shouldRegisterLLMIntegrations("use", true), false);
+  assert.equal(shouldRegisterLLMIntegrations(undefined, true), false);
 });
 
 test("parses only explicit llm integration preferences", () => {
