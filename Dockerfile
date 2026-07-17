@@ -210,6 +210,10 @@ RUN usermod -l exedev -c "exe.dev user" ubuntu && \
 # first boot after the disk is grown.
 RUN echo '/dev/vda / ext4 defaults,x-systemd.growfs 0 1' > /etc/fstab
 
+# Stop systemd wiping /tmp at boot; that races non-systemd users of the system
+# that also run at boot.
+COPY tmpfiles-tmp.conf /etc/tmpfiles.d/tmp.conf
+
 ENV EXEUNTU=1
 
 # https://github.com/trfore/docker-ubuntu2404-systemd/blob/main/Dockerfile suggests the following
