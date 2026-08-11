@@ -116,9 +116,15 @@ func TestUpdateCodexInstallsLatestGitHubReleaseAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := shellBinary(t, "codex rust-v0.140.0")
 	assetName := "codex-package-" + assetArch + ".tar.gz"
-	archive := codexArchive(t, "bin/codex", binary)
+	archive := codexPackageArchive(t, []codexPackageFile{
+		{name: "bin/codex", mode: 0o755, body: shellBinary(t, "codex rust-v0.140.0")},
+		{name: "bin/codex-code-mode-host", mode: 0o755, body: shellBinary(t, "code mode host")},
+		{name: "codex-package.json", mode: 0o644, body: []byte(`{"version":"0.140.0"}`)},
+		{name: "codex-path/rg", mode: 0o755, body: shellBinary(t, "ripgrep")},
+		{name: "codex-resources/bwrap", mode: 0o755, body: shellBinary(t, "bwrap")},
+		{name: "codex-resources/zsh/codex.zsh", mode: 0o644, body: []byte("#compdef codex\n")},
+	})
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = append(requested, r.URL.Path)
@@ -135,7 +141,14 @@ func TestUpdateCodexInstallsLatestGitHubReleaseAsset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	installPath := filepath.Join(t.TempDir(), "codex")
+	installRoot := t.TempDir()
+	installPath := filepath.Join(installRoot, "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installPath, shellBinary(t, "flattened codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var stdout bytes.Buffer
 	result, err := Update(context.Background(), Options{
 		Agent:       AgentCodex,
@@ -156,7 +169,98 @@ func TestUpdateCodexInstallsLatestGitHubReleaseAsset(t *testing.T) {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	assertRequests(t, requested, []string{"/latest", "/rust-v0.140.0/codex-package_SHA256SUMS", "/rust-v0.140.0/" + assetName})
-	assertExecutableOutput(t, installPath, "codex rust-v0.140.0\n")
+	assertSymlinkExecutableOutput(t, installPath, "codex rust-v0.140.0\n")
+
+	packageBinary, err := filepath.EvalSymlinks(installPath)
+	if err != nil {
+		t.Fatalf("resolve installed codex: %v", err)
+	}
+	packageRoot := filepath.Dir(filepath.Dir(packageBinary))
+	wantReleaseRoot := filepath.Join(installRoot, "lib", "codex", "releases") + string(os.PathSeparator)
+	if !strings.HasPrefix(packageRoot+string(os.PathSeparator), wantReleaseRoot) {
+		t.Fatalf("package root = %q, want under %q", packageRoot, wantReleaseRoot)
+	}
+	rootInfo, err := os.Stat(packageRoot)
+	if err != nil {
+		t.Fatalf("stat package root: %v", err)
+	}
+	if perm := rootInfo.Mode().Perm(); perm != 0o755 {
+		t.Fatalf("package root perm = %o, want 0755 (world-traversable)", perm)
+	}
+	helperLink := filepath.Join(installRoot, "bin", "codex-code-mode-host")
+	assertSymlinkExecutableOutput(t, helperLink, "code mode host\n")
+	helperTarget, err := filepath.EvalSymlinks(helperLink)
+	if err != nil {
+		t.Fatalf("resolve code mode host symlink: %v", err)
+	}
+	if want := filepath.Join(packageRoot, "bin", "codex-code-mode-host"); helperTarget != want {
+		t.Fatalf("code mode host target = %q, want %q", helperTarget, want)
+	}
+	assertExecutableOutput(t, filepath.Join(packageRoot, "bin", "codex-code-mode-host"), "code mode host\n")
+	assertExecutableOutput(t, filepath.Join(packageRoot, "codex-path", "rg"), "ripgrep\n")
+	assertExecutableOutput(t, filepath.Join(packageRoot, "codex-resources", "bwrap"), "bwrap\n")
+	assertFileContents(t, filepath.Join(packageRoot, "codex-package.json"), `{"version":"0.140.0"}`)
+	assertFileContents(t, filepath.Join(packageRoot, "codex-resources", "zsh", "codex.zsh"), "#compdef codex\n")
+}
+
+func TestUpdateCodexRetainsPreviousVersionedPackage(t *testing.T) {
+	assetArch, err := codexAssetArch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetName := "codex-package-" + assetArch + ".tar.gz"
+	archives := map[string][]byte{
+		"rust-v0.140.0": codexPackageArchive(t, []codexPackageFile{
+			{name: "bin/codex", mode: 0o755, body: shellBinary(t, "codex 0.140.0")},
+			{name: "bin/codex-code-mode-host", mode: 0o755, body: shellBinary(t, "host 0.140.0")},
+		}),
+		"rust-v0.141.0": codexPackageArchive(t, []codexPackageFile{
+			{name: "bin/codex", mode: 0o755, body: shellBinary(t, "codex 0.141.0")},
+			{name: "bin/codex-code-mode-host", mode: 0o755, body: shellBinary(t, "host 0.141.0")},
+		}),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for tag, archive := range archives {
+			switch r.URL.Path {
+			case "/" + tag + "/codex-package_SHA256SUMS":
+				fmt.Fprint(w, codexSHA256Sums(assetName, archive))
+				return
+			case "/" + tag + "/" + assetName:
+				w.Write(archive)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	installPath := filepath.Join(t.TempDir(), "bin", "codex")
+	var firstPackageBinary string
+	for _, tag := range []string{"rust-v0.140.0", "rust-v0.141.0"} {
+		_, err := Update(context.Background(), Options{
+			Agent:       AgentCodex,
+			Version:     tag,
+			InstallPath: installPath,
+			HTTPClient:  server.Client(),
+			ReleaseBase: server.URL,
+		})
+		if err != nil {
+			t.Fatalf("update codex to %s: %v", tag, err)
+		}
+		if tag == "rust-v0.140.0" {
+			firstPackageBinary, err = filepath.EvalSymlinks(installPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	assertSymlinkExecutableOutput(t, installPath, "codex 0.141.0\n")
+	assertExecutableOutput(t, firstPackageBinary, "codex 0.140.0\n")
+	// The upgrade retargets the code mode host symlink to the new package
+	// while the prior package (still referenced by running processes) stays.
+	helperLink := filepath.Join(filepath.Dir(installPath), "codex-code-mode-host")
+	assertSymlinkExecutableOutput(t, helperLink, "host 0.141.0\n")
+	assertExecutableOutput(t, filepath.Join(filepath.Dir(firstPackageBinary), "codex-code-mode-host"), "host 0.140.0\n")
 }
 
 func TestResolveCodexTagUsesGitHubLatestRedirect(t *testing.T) {
@@ -241,6 +345,9 @@ func TestUpdateCodexRejectsArchiveWithoutPlatformBinary(t *testing.T) {
 	defer server.Close()
 
 	installPath := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(installPath, shellBinary(t, "existing codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	_, err = Update(context.Background(), Options{
 		Agent:       AgentCodex,
 		Version:     "rust-v0.140.0",
@@ -251,9 +358,7 @@ func TestUpdateCodexRejectsArchiveWithoutPlatformBinary(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "codex archive missing") {
 		t.Fatalf("update err = %v, want missing binary error", err)
 	}
-	if _, statErr := os.Stat(installPath); !os.IsNotExist(statErr) {
-		t.Fatalf("install path exists after failed archive extraction: %v", statErr)
-	}
+	assertExecutableOutput(t, installPath, "existing codex\n")
 }
 
 func TestUpdateCodexRejectsArchiveChecksumMismatch(t *testing.T) {
@@ -309,19 +414,32 @@ func shellQuote(value string) string {
 
 func codexArchive(t *testing.T, name string, body []byte) []byte {
 	t.Helper()
+	return codexPackageArchive(t, []codexPackageFile{{name: name, mode: 0o755, body: body}})
+}
+
+type codexPackageFile struct {
+	name string
+	mode int64
+	body []byte
+}
+
+func codexPackageArchive(t *testing.T, files []codexPackageFile) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gzw)
-	header := &tar.Header{
-		Name: name,
-		Mode: 0o755,
-		Size: int64(len(body)),
-	}
-	if err := tw.WriteHeader(header); err != nil {
-		t.Fatalf("write codex tar header: %v", err)
-	}
-	if _, err := tw.Write(body); err != nil {
-		t.Fatalf("write codex tar body: %v", err)
+	for _, file := range files {
+		header := &tar.Header{
+			Name: file.name,
+			Mode: file.mode,
+			Size: int64(len(file.body)),
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatalf("write codex tar header: %v", err)
+		}
+		if _, err := tw.Write(file.body); err != nil {
+			t.Fatalf("write codex tar body: %v", err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar: %v", err)
@@ -362,5 +480,34 @@ func assertExecutableOutput(t *testing.T, path, want string) {
 	}
 	if string(out) != want {
 		t.Fatalf("executable output = %q, want %q", string(out), want)
+	}
+}
+
+func assertSymlinkExecutableOutput(t *testing.T, path, want string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat installed executable symlink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("installed executable is not a symlink: %v", info.Mode())
+	}
+	out, err := exec.Command(path).Output()
+	if err != nil {
+		t.Fatalf("run installed executable symlink: %v", err)
+	}
+	if string(out) != want {
+		t.Fatalf("executable output = %q, want %q", string(out), want)
+	}
+}
+
+func assertFileContents(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s contents = %q, want %q", path, got, want)
 	}
 }
