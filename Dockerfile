@@ -341,6 +341,15 @@ RUN chmod 644 /var/www/html/index.html
 COPY xterm-ghostty.terminfo /tmp/xterm-ghostty.terminfo
 RUN tic -x - < /tmp/xterm-ghostty.terminfo && rm /tmp/xterm-ghostty.terminfo
 
+# Empty the machine ID baked in by package configuration, so each VM built from
+# this image generates its own on first boot. A shared one defeats anything that
+# assumes machine IDs are unique, such as systemd's FixedRandomDelay=. Empty
+# rather than removed: systemd reads an absent /etc/machine-id as a first boot
+# and presets all units, re-enabling the ones disabled above. Keep this last, so
+# that no apt-get install bakes in a new ID.
+RUN : > /etc/machine-id && \
+	ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
 # Expose the web server ports
 EXPOSE 8000 9999
 
