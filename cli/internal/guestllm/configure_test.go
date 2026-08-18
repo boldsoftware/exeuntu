@@ -227,12 +227,30 @@ func TestConfigureClientUsesRequestedIntegration(t *testing.T) {
 	}
 }
 
+// TestDefaultIntegrationBaseURLTeamHostForm pins the team integration host
+// form (B-076 leg 3): the team suffix is .team.<boxhost> (stage.Env's
+// TeamIntHostSuffix, ".team.exe.xyz" in prod) — NOT .team.int.<boxhost>.
+// The old form produced hosts the exelet refuses (the personal suffix match
+// leaves a dotted name), so team LLM integrations were broken in the guest
+// configurator.
+func TestDefaultIntegrationBaseURLTeamHostForm(t *testing.T) {
+	if got, want := defaultIntegrationBaseURL("agentllm", false), "https://agentllm.int.exe.xyz"; got != want {
+		t.Errorf("defaultIntegrationBaseURL(personal) = %q, want %q", got, want)
+	}
+	if got, want := defaultIntegrationBaseURL("teamllm", true), "https://teamllm.team.exe.xyz"; got != want {
+		t.Errorf("defaultIntegrationBaseURL(team) = %q, want %q", got, want)
+	}
+}
+
 func TestConfigureClientUsesTeamIntegrationHost(t *testing.T) {
 	home := t.TempDir()
 	fixture := &discoveryFixture{
 		integrations: []reflectionIntegration{{Name: "teamllm", Type: "llm", Team: true}},
 		catalogs: map[string]llmModelCatalog{
-			"teamllm.team.int.exe.xyz": catalog(
+			// The team integration host form is <name>.team.exe.xyz (the
+			// .team.<boxhost> suffix) — deliberately NOT <name>.team.int.exe.xyz,
+			// which the exelet refuses (B-076).
+			"teamllm.team.exe.xyz": catalog(
 				llmCatalogModel{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
 			),
 		},
@@ -247,7 +265,7 @@ func TestConfigureClientUsesTeamIntegrationHost(t *testing.T) {
 	}
 	requireResult(t, result, ClientCodex, "configured")
 	codexConfig := readFile(t, filepath.Join(home, ".codex", "config.toml"))
-	if !strings.Contains(codexConfig, `base_url = "https://teamllm.team.int.exe.xyz/v1"`) {
+	if !strings.Contains(codexConfig, `base_url = "https://teamllm.team.exe.xyz/v1"`) {
 		t.Fatalf("codex config does not use team integration host:\n%s", codexConfig)
 	}
 }

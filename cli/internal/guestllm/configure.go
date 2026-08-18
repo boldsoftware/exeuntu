@@ -291,10 +291,15 @@ func reflectionIntegrationsURL(reflectionURL string) (string, error) {
 	return u.String(), nil
 }
 
+// defaultIntegrationBaseURL builds the integration proxy base URL for an
+// integration name. The personal suffix is .int.<boxhost> and the team suffix
+// is .team.<boxhost> (stage.Env's IntegrationHostSuffix/TeamIntHostSuffix —
+// ".int.exe.xyz"/".team.exe.xyz" in prod). Note the team form is NOT
+// "<name>.team.int.<boxhost>": the exelet refuses that host (B-076).
 func defaultIntegrationBaseURL(name string, team bool) string {
 	host := name + ".int.exe.xyz"
 	if team {
-		host = name + ".team.int.exe.xyz"
+		host = name + ".team.exe.xyz"
 	}
 	return "https://" + host
 }
