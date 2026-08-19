@@ -196,6 +196,7 @@ func agentInstallerCommandGroup(commandName, usage string) *cli.Command {
 		Commands: []*cli.Command{
 			agentInstallerCommand(commandName, agentupdate.AgentClaude, commandName+" Claude Code", "Claude Code version to install instead of latest"),
 			agentInstallerCommand(commandName, agentupdate.AgentCodex, commandName+" Codex", "Codex release version to install instead of latest"),
+			agentInstallerCommand(commandName, agentupdate.AgentOpenCode, commandName+" OpenCode", "OpenCode release version to install instead of latest"),
 			piInstallerCommand(commandName),
 		},
 		OnUsageError: usageErrorHandler,

@@ -17,8 +17,9 @@ import (
 type Agent string
 
 const (
-	AgentClaude Agent = "claude"
-	AgentCodex  Agent = "codex"
+	AgentClaude   Agent = "claude"
+	AgentCodex    Agent = "codex"
+	AgentOpenCode Agent = "opencode"
 )
 
 type Options struct {
@@ -43,6 +44,8 @@ func Update(ctx context.Context, opts Options) (Result, error) {
 		return updateClaude(ctx, opts)
 	case AgentCodex:
 		return updateCodex(ctx, opts)
+	case AgentOpenCode:
+		return updateOpenCode(ctx, opts)
 	default:
 		return Result{}, fmt.Errorf("unsupported agent updater: %q", opts.Agent)
 	}
@@ -55,7 +58,7 @@ type updater struct {
 
 func newUpdater(client *http.Client, stdout io.Writer) updater {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	if stdout == nil {
 		stdout = io.Discard

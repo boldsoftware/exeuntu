@@ -162,6 +162,7 @@ func TestUpdateCommandsAreSilentOnSuccess(t *testing.T) {
 	for _, args := range [][]string{
 		{"exeuntu", "update", "claude"},
 		{"exeuntu", "update", "codex"},
+		{"exeuntu", "update", "opencode"},
 		{"exeuntu", "update", "pi"},
 	} {
 		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
@@ -195,6 +196,7 @@ func TestInstallCommandsShowUpdaterOutput(t *testing.T) {
 	}{
 		{args: []string{"exeuntu", "install", "claude"}, want: "agent output\n"},
 		{args: []string{"exeuntu", "install", "codex"}, want: "agent output\n"},
+		{args: []string{"exeuntu", "install", "opencode"}, want: "agent output\n"},
 		{args: []string{"exeuntu", "install", "pi"}, want: "pi output\n"},
 	} {
 		t.Run(strings.Join(tc.args[1:], " "), func(t *testing.T) {
@@ -209,6 +211,25 @@ func TestInstallCommandsShowUpdaterOutput(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
+	}
+}
+
+func TestOpenCodeInstallerForwardsVersion(t *testing.T) {
+	var got agentupdate.Options
+	withAgentUpdater(t, func(_ context.Context, opts agentupdate.Options) (agentupdate.Result, error) {
+		got = opts
+		return agentupdate.Result{Agent: opts.Agent, Version: opts.Version, Path: "test-path"}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"exeuntu", "install", "opencode", "--version", "v1.18.18"}, &stdout, &stderr); err != nil {
+		t.Fatalf("install opencode: %v", err)
+	}
+	if got.Agent != agentupdate.AgentOpenCode || got.Version != "v1.18.18" {
+		t.Fatalf("updater options = %#v", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 
