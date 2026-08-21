@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Stage 1: Get Chrome/Chromium from chromedp/headless-shell
 FROM docker.io/chromedp/headless-shell:stable AS chrome
 
@@ -61,7 +63,6 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirror://mirrors.ubuntu.c
 		docker.io docker-buildx docker-compose-v2 \
 		imagemagick ffmpeg \
 		bubblewrap \
-		gh \
 		dbus-user-session \
 		&& apt-get remove -y pollinate ubuntu-fan && \
 		# openssh-server generates host keys during package configuration.
@@ -73,6 +74,13 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirror://mirrors.ubuntu.c
 	# Remove policy-rc.d so services can start normally (the base image includes this
 	# to prevent services from starting during build, but we run systemd at runtime)
 	rm -f /usr/sbin/policy-rc.d
+
+ARG GH_VERSION=2.97.0
+
+# CI overrides GH_VERSION with the newest stable release older than five days.
+RUN --mount=type=bind,source=install-gh.sh,target=/tmp/install-gh.sh \
+	bash /tmp/install-gh.sh "${GH_VERSION}" && \
+	gh --version
 
 # Install Tailscale (keyring method, per https://tailscale.com/install.sh)
 # This must run after ca-certificates and curl are installed.
