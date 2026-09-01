@@ -29,7 +29,13 @@ export interface CatalogModel {
   input?: ("text" | "image")[];
   contextWindow?: number;
   maxTokens?: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cacheWrite1h?: number;
+  };
   compat?: CatalogCompat;
 }
 

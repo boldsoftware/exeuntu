@@ -394,7 +394,7 @@ test("preserves reflected catalog model order for provider configs", () => {
             input: ["text"],
             contextWindow: 128000,
             maxTokens: 32000,
-            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2, cacheWrite1h: 0.4 },
           },
           {
             id: "claude-fable-5",
