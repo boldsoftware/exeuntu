@@ -141,7 +141,13 @@ func TestUpdateCodexInstallsLatestGitHubReleaseAsset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	installRoot := t.TempDir()
+	// EvalSymlinks so the tree matches what the test later resolves the
+	// installed binary to: on macOS $TMPDIR lives under /var, itself a
+	// symlink to /private/var.
+	installRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	installPath := filepath.Join(installRoot, "bin", "codex")
 	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
 		t.Fatal(err)
