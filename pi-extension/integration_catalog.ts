@@ -108,6 +108,11 @@ type CompatBag = {
 
 export type JSONFetcher = (url: string) => Promise<unknown | undefined>;
 
+export type ModelCapabilityLookup = (
+  provider: string,
+  modelID: string,
+) => Pick<ProviderModelConfig, "reasoning" | "thinkingLevelMap"> | undefined;
+
 // Both the integration catalog and the bundled pricing sidecar currently use
 // schema version 1. Unknown shapes are ignored rather than becoming routes.
 export const SCHEMA_VERSION = 1;
@@ -322,6 +327,7 @@ function configFromIntegrationModel(
   integration: DiscoveredIntegration,
   model: IntegrationModel,
   fallback: CatalogModel | undefined,
+  lookupCapabilities: ModelCapabilityLookup,
 ): ProviderModelConfig | undefined {
   if (!validIntegrationProviderID(model.provider)) return undefined;
   const adapter = integrationAPIAdapter(model);
@@ -330,13 +336,17 @@ function configFromIntegrationModel(
 
   const modelID = integrationModelID(model);
   if (!modelID) return undefined;
+  const capabilities = lookupCapabilities(model.provider, modelID);
   const compat = sanitizeCompat(fallback?.compat, model.provider, modelID);
   return {
     id: modelID,
     name: model.name || fallback?.name || modelID,
     api: adapter.piAPI,
     baseUrl,
-    reasoning: fallback?.reasoning ?? false,
+    reasoning: capabilities?.reasoning ?? fallback?.reasoning ?? false,
+    ...(capabilities?.thinkingLevelMap !== undefined
+      ? { thinkingLevelMap: capabilities.thinkingLevelMap }
+      : {}),
     input: inputModalities(model, fallback),
     contextWindow: model.limits?.context_window ?? fallback?.contextWindow ?? 128000,
     maxTokens: model.limits?.max_output_tokens ?? fallback?.maxTokens ?? 4096,
@@ -381,6 +391,7 @@ export function providerInfosFromIntegrationCatalogs(
   integrations: DiscoveredIntegration[],
   pricingCatalog: Catalog | undefined,
   warn: WarnFn = console.warn,
+  lookupCapabilities: ModelCapabilityLookup = () => undefined,
 ): Map<string, IntegrationProviderInfo> {
   const costs = costCatalogIndex(pricingCatalog);
   const grouped = new Map<string, { names: string[]; candidates: IntegrationModelCandidate[] }>();
@@ -393,7 +404,7 @@ export function providerInfosFromIntegrationCatalogs(
       const modelID = integrationModelID(model);
       if (!modelID) continue;
       const fallback = fallbackCatalogModel(costs, provider, modelID, model.id);
-      const config = configFromIntegrationModel(integration, model, fallback);
+      const config = configFromIntegrationModel(integration, model, fallback, lookupCapabilities);
       if (!config) continue;
       if (!fallback) warnedMissingPricing.add(`${provider}/${modelID}`);
 

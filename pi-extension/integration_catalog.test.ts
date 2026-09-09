@@ -229,6 +229,110 @@ test("namespaces reflected xAI models and never creates routes from pricing meta
   ]);
 });
 
+test("inherits built-in thinking capabilities before aliasing integration models", () => {
+  const thinkingLevelMap = {
+    off: "none",
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  };
+  const lookups: string[] = [];
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: { schema_version: 1, models: [openAIGPTModel("chatgpt")] },
+      },
+    ],
+    undefined,
+    () => {},
+    (provider, modelID) => {
+      lookups.push(`${provider}/${modelID}`);
+      return { reasoning: true, thinkingLevelMap };
+    },
+  );
+
+  assert.deepEqual(lookups, ["openai/gpt-5.5"]);
+  const model = infos.get("exe-dev-openai")?.config.models?.[0];
+  assert.equal(model?.id, "gpt-5.5@llm");
+  assert.equal(model?.reasoning, true);
+  assert.deepEqual(model?.thinkingLevelMap, thinkingLevelMap);
+});
+
+test("preserves explicit false from built-in capabilities over pricing metadata", () => {
+  const pricingCatalog: Catalog = {
+    schemaVersion: 1,
+    providers: [
+      {
+        id: "openai",
+        path: "openai/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            reasoning: true,
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+          },
+        ],
+      },
+    ],
+  };
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: { schema_version: 1, models: [openAIGPTModel("managed")] },
+      },
+    ],
+    pricingCatalog,
+    () => {},
+    () => ({ reasoning: false, thinkingLevelMap: undefined }),
+  );
+
+  const model = infos.get("exe-dev-openai")?.config.models?.[0];
+  assert.equal(model?.reasoning, false);
+  assert.equal("thinkingLevelMap" in (model ?? {}), false);
+});
+
+test("retains pricing-catalog reasoning for unknown built-in models", () => {
+  const pricingCatalog: Catalog = {
+    schemaVersion: 1,
+    providers: [
+      {
+        id: "xai",
+        path: "xai/v1",
+        models: [
+          {
+            id: "grok-4.5",
+            reasoning: true,
+            cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+          },
+        ],
+      },
+    ],
+  };
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: { schema_version: 1, models: [xaiGrokModel()] },
+      },
+    ],
+    pricingCatalog,
+    () => {},
+    () => undefined,
+  );
+
+  const model = infos.get("exe-dev-xai")?.config.models?.[0];
+  assert.equal(model?.reasoning, true);
+  assert.equal("thinkingLevelMap" in (model ?? {}), false);
+});
+
 test("routes arbitrary providers by client protocol priority", () => {
   const infos = providerInfosFromIntegrationCatalogs(
     [
