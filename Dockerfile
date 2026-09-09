@@ -88,6 +88,10 @@ RUN curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /us
     curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list && \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale
 
+# exe-init manages DNS directly. The unused resolvconf shim makes Tailscale
+# misdetect its own DNS configuration as openresolv (tailscale/tailscale#19062).
+RUN apt-get purge -y systemd-resolved
+
 # Install latest stable Go from go.dev (the golang-go apt package lags behind)
 RUN ARCH=$(dpkg --print-architecture) && \
     GO_VERSION=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version') && \
@@ -123,7 +127,6 @@ RUN rm /etc/systemd/system/multi-user.target.wants/console-setup.service \
 		etc-hosts.mount \
 		etc-hostname.mount \
 		-.mount \
-		systemd-resolved.service \
 		systemd-remount-fs.service \
 		systemd-sysusers.service \
 		systemd-update-done.service \
