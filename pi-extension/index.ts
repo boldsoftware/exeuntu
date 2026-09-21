@@ -32,7 +32,7 @@ import {
 
 // Reflection and integration endpoints are reachable inside every exe.dev VM.
 const REFLECTION_INTEGRATIONS_URL = "https://reflection.int.exe.xyz/integrations";
-const FETCH_TIMEOUT_MS = 1500;
+const FETCH_TIMEOUT_MS = 5000;
 
 // The bundled public catalog contributes pricing and compatibility metadata
 // only. Reflection-discovered integrations are the sole source of models and

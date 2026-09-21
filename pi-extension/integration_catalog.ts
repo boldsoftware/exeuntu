@@ -139,8 +139,17 @@ function validIntegrationCatalog(cat: unknown): cat is IntegrationCatalog {
   return true;
 }
 
+// Fetch with a single retry on network failure.
+async function fetchWithRetry(url: string, timeoutMS: number): Promise<Response> {
+  try {
+    return await fetch(url, { signal: AbortSignal.timeout(timeoutMS) });
+  } catch {
+    return await fetch(url, { signal: AbortSignal.timeout(timeoutMS) });
+  }
+}
+
 export async function fetchJSONWithTimeout(url: string, timeoutMS: number): Promise<unknown | undefined> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMS) });
+  const res = await fetchWithRetry(url, timeoutMS);
   if (!res.ok) return undefined;
   return (await res.json()) as unknown;
 }

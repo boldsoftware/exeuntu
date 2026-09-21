@@ -288,6 +288,58 @@ test("omits ChatGPT-account models that need payload rewriting", async () => {
   }
 });
 
+test("retries once when the first fetch attempt fails", async () => {
+  const requested = [];
+  const config = await configureWith(async (url) => {
+    requested.push(String(url));
+    const attempt = requested.filter((seen) => seen === String(url)).length;
+    if (attempt === 1) throw new Error("The operation timed out.");
+    switch (String(url)) {
+      case reflectionURL:
+        return response({ integrations: [{ name: "llm", type: "llm" }] });
+      case "https://llm.int.exe.xyz/models.json":
+        return response(catalog([{
+          id: "openai/gpt-test",
+          provider: "openai",
+          native_id: "gpt-test",
+          apis: ["openai_responses"],
+        }]));
+      default:
+        throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(requested, [
+    reflectionURL,
+    reflectionURL,
+    "https://llm.int.exe.xyz/models.json",
+    "https://llm.int.exe.xyz/models.json",
+  ]);
+  assert.ok(config.provider["exe-p-3-llm-3-llm-6-openai-responses"]);
+});
+
+// An HTTP response means the endpoint answered: probing base URL candidates
+// 404s by design, and retrying those would double discovery latency on the
+// path the retry exists to keep fast.
+test("does not retry a fetch the server answered with an error status", async () => {
+  const warnings = [];
+  const oldWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  const requested = [];
+  try {
+    const config = await configureWith(async (url) => {
+      requested.push(String(url));
+      return response({ error: "unavailable" }, 503);
+    });
+    assert.deepEqual(requested, [reflectionURL]);
+    assert.deepEqual(config, {});
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /reflection fetch failed/);
+  } finally {
+    console.warn = oldWarn;
+  }
+});
+
 test("fails open when reflection or catalogs are unavailable", async () => {
   const warnings = [];
   const oldWarn = console.warn;

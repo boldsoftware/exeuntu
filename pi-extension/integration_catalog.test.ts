@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   discoverIntegrationCatalogs,
+  fetchJSONWithTimeout,
   integrationPromptAvailabilityLabel,
   providerInfosFromIntegrationCatalogs,
   type Catalog,
@@ -9,6 +10,20 @@ import {
 } from "./integration_catalog.ts";
 
 const reflectionURL = "https://reflection.int.exe.xyz/integrations";
+
+async function withStubbedFetch<T>(impl: typeof globalThis.fetch, fn: () => Promise<T>): Promise<T> {
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
 
 function openAIGPTModel(mode: "managed" | "chatgpt") {
   return {
@@ -155,6 +170,56 @@ test("returns no integrations when reflection has no attached llm", async () => 
 
   assert.equal(discovered.found, false);
   assert.deepEqual(discovered.integrations, []);
+});
+
+test("retries once when the first fetch attempt fails", async () => {
+  let attempts = 0;
+  const catalog = await withStubbedFetch(
+    async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("The operation timed out.");
+      return jsonResponse({ schema_version: 1, models: [] });
+    },
+    () => fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(catalog, { schema_version: 1, models: [] });
+});
+
+test("surfaces the failure when the retried fetch also fails", async () => {
+  let attempts = 0;
+  await withStubbedFetch(
+    async () => {
+      attempts++;
+      throw new Error(`attempt ${attempts} timed out`);
+    },
+    async () => {
+      await assert.rejects(
+        fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+        /attempt 2 timed out/,
+      );
+    },
+  );
+
+  assert.equal(attempts, 2);
+});
+
+// An HTTP response means the endpoint answered: probing base URL candidates
+// 404s by design, and retrying those would double discovery latency on the
+// path the retry exists to keep fast.
+test("does not retry a fetch the server answered with an error status", async () => {
+  let attempts = 0;
+  const catalog = await withStubbedFetch(
+    async () => {
+      attempts++;
+      return jsonResponse({ error: "not found" }, 404);
+    },
+    () => fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(catalog, undefined);
 });
 
 test("namespaces reflected xAI models and never creates routes from pricing metadata", () => {

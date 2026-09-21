@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 
 const REFLECTION_INTEGRATIONS_URL = "https://reflection.int.exe.xyz/integrations";
-const FETCH_TIMEOUT_MS = 1500;
+const FETCH_TIMEOUT_MS = 5000;
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
 const ADAPTERS = {
@@ -30,8 +30,17 @@ function runningOnExeDev() {
   return existsSync("/exe.dev");
 }
 
+// Fetch with a single retry on network failure.
+async function fetchWithRetry(url) {
+  try {
+    return await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch {
+    return await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  }
+}
+
 async function fetchJSON(url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const response = await fetchWithRetry(url);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   return response.json();
 }
