@@ -104,6 +104,15 @@ COPY --from=exeuntu-cli /out/exeuntu /usr/local/bin/exeuntu
 # Install uv to /usr/local/bin
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# Install the DuckDB CLI (a single static binary).
+ARG DUCKDB_VERSION=1.5.5
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://install.duckdb.org/v${DUCKDB_VERSION}/duckdb_cli-linux-${ARCH}.zip" -o /tmp/duckdb.zip && \
+    unzip -o /tmp/duckdb.zip -d /usr/local/bin duckdb && \
+    rm /tmp/duckdb.zip && \
+    chmod 0755 /usr/local/bin/duckdb && \
+    duckdb --version
+
 # Configure systemd
 RUN rm /etc/systemd/system/multi-user.target.wants/console-setup.service \
 		/etc/systemd/system/multi-user.target.wants/ModemManager.service \
