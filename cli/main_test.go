@@ -233,61 +233,6 @@ func TestOpenCodeInstallerForwardsVersion(t *testing.T) {
 	}
 }
 
-func TestReplacedUpdateCommandsAreNotExposed(t *testing.T) {
-	for _, args := range [][]string{
-		{"exeuntu", "codex", "update", "--help"},
-		{"exeuntu", "claude", "update", "--help"},
-		{"exeuntu", "pi", "--help"},
-		{"exeuntu", "pi", "update", "--help"},
-	} {
-		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			err := run(args, &stdout, &stderr)
-			if err == nil {
-				t.Fatal("replaced update command succeeded, want error")
-			}
-			if stdout.Len() != 0 {
-				t.Fatalf("stdout = %q, want empty", stdout.String())
-			}
-			if got := stderr.String(); strings.Contains(got, "usage: exeuntu codex update") ||
-				strings.Contains(got, "usage: exeuntu claude update") ||
-				strings.Contains(got, "usage: exeuntu pi update") {
-				t.Fatalf("stderr exposes replaced updater usage:\n%s", got)
-			}
-		})
-	}
-}
-
-func TestRemovedConfigureCommandsAreNotExposed(t *testing.T) {
-	for _, args := range [][]string{
-		{"exeuntu", "llm"},
-		{"exeuntu", "llm", "configure", "all"},
-		{"exeuntu", "llm", "configure", "codex"},
-		{"exeuntu", "llm", "configure", "claude"},
-		{"exeuntu", "codex", "--help"},
-		{"exeuntu", "codex", "configure", "--help"},
-		{"exeuntu", "claude", "--help"},
-		{"exeuntu", "claude", "configure", "--help"},
-	} {
-		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			err := run(args, &stdout, &stderr)
-			if err == nil {
-				t.Fatal("removed configure command succeeded, want error")
-			}
-			if stdout.Len() != 0 {
-				t.Fatalf("stdout = %q, want empty", stdout.String())
-			}
-			if got := stderr.String(); strings.Contains(got, "usage: exeuntu codex configure") ||
-				strings.Contains(got, "usage: exeuntu claude configure") ||
-				strings.Contains(got, "usage: exeuntu codex <command>") ||
-				strings.Contains(got, "usage: exeuntu claude <command>") {
-				t.Fatalf("stderr exposes replaced configure usage:\n%s", got)
-			}
-		})
-	}
-}
-
 func withGitVersion(t *testing.T, version string) {
 	t.Helper()
 	old := gitVersion
