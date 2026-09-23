@@ -261,6 +261,12 @@ RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/exedev/.bashrc && \
 # Configure git to use 'main' as default branch name
 RUN git config --global init.defaultBranch main
 
+# Pre-install the DuckDB httpfs extension (http(s)://, s3://) into
+# ~/.duckdb/extensions so it works without a runtime download. Extensions are
+# per-user and per-DuckDB-version, so this must run as exedev after the CLI.
+RUN duckdb -c "INSTALL httpfs;" && \
+    duckdb -c "SET autoinstall_known_extensions=false; LOAD httpfs;"
+
 # Switch back to root to install systemd service
 USER root
 
