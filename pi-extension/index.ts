@@ -3,6 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { getModel } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +59,15 @@ function isIntegrationBaseUrl(baseUrl: string | undefined, info: IntegrationProv
 }
 
 type CurrentModel = NonNullable<ExtensionContext["model"]>;
+
+function builtInModelCapabilities(provider: string, modelID: string) {
+  const model = getModel(provider, modelID);
+  if (!model) return undefined;
+  return {
+    reasoning: model.reasoning,
+    thinkingLevelMap: model.thinkingLevelMap,
+  };
+}
 
 let procEnvCache: Map<string, string> | null = null;
 
@@ -118,7 +128,12 @@ export default async function (pi: ExtensionAPI) {
   const integrationNames = discovered.integrations.map((integration) => integration.name);
   const routeLabel = integrationProviderDisplayName(integrationNames);
   const availableIntegrationsLabel = integrationPromptAvailabilityLabel(integrationNames);
-  const integrationInfos = providerInfosFromIntegrationCatalogs(discovered.integrations, pricingCatalog);
+  const integrationInfos = providerInfosFromIntegrationCatalogs(
+    discovered.integrations,
+    pricingCatalog,
+    console.warn,
+    builtInModelCapabilities,
+  );
   if (discovered.found && integrationInfos.size === 0 && !disabled) {
     console.warn(`[pi-exe-dev] LLM integration discovered, but no supported models were available`);
   }
