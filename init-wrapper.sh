@@ -6,7 +6,9 @@
 # output with
 # 	docker run -it ghcr.io/boldsoftware/exeuntu:latest
 
-echo "Docker users can use Ctrl-P Ctrl-Q to detach."
+if [[ -e /.dockerenv ]]; then
+    echo "Docker users can use Ctrl-P Ctrl-Q to detach."
+fi
 
 if [[ $$ != 1 ]]; then
     # There's a really opaque error about telinit otherwise...
