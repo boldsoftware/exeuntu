@@ -26,9 +26,12 @@ if [[ -w /proc/sys/net/ipv6/ip_unprivileged_port_start ]]; then
     printf '0\n' >/proc/sys/net/ipv6/ip_unprivileged_port_start
 fi
 
-# Kata containers default to mounting this readonly, but Docker needs
-# to write to /proc/sys to set net.ipv4.ip_forward=1
-mount -o remount,rw /proc/sys
+# Kata containers mount /proc/sys separately and readonly, but Docker needs
+# to write there to set net.ipv4.ip_forward=1. On VMs it is not a separate
+# mount and /proc is already writable.
+if mountpoint -q /proc/sys; then
+    mount -o remount,rw /proc/sys
+fi
 
 echo "Starting systemd..."
 # Add --log-level=debug to see more systemd debugging
