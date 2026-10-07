@@ -86,7 +86,10 @@ RUN --mount=type=bind,source=install-gh.sh,target=/tmp/install-gh.sh \
 # This must run after ca-certificates and curl are installed.
 RUN curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg && \
     curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list && \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale && \
+    # Require a release with the x/crypto and x/image security fixes.
+    dpkg --compare-versions "$(dpkg-query -W -f '${Version}' tailscale)" ge 1.104.1 && \
+    tailscale version
 
 # exe-init manages DNS directly. The unused resolvconf shim makes Tailscale
 # misdetect its own DNS configuration as openresolv (tailscale/tailscale#19062).
