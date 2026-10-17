@@ -4,20 +4,22 @@ const REFLECTION_INTEGRATIONS_URL = "https://reflection.int.exe.xyz/integrations
 const FETCH_TIMEOUT_MS = 5000;
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
+// OpenCode 2 bundles these provider runtimes; nothing is fetched from npm.
 const ADAPTERS = {
   responses: {
-    npm: "@ai-sdk/openai",
+    package: "@opencode/ai/providers/openai/responses",
     label: "OpenAI Responses",
   },
   messages: {
-    npm: "@ai-sdk/anthropic",
+    package: "@opencode/ai/providers/anthropic",
     label: "Anthropic Messages",
   },
   chat: {
-    npm: "@ai-sdk/openai-compatible",
+    package: "@opencode/ai/providers/openai-compatible",
     label: "OpenAI Chat",
   },
 };
+const MODALITIES = ["text", "audio", "image", "video", "pdf"];
 
 function integrationsDisabled() {
   return TRUTHY.has((process.env.EXE_DEV_DISABLE_GATEWAY || "").toLowerCase());
@@ -186,38 +188,40 @@ function positiveNumber(value) {
     : undefined;
 }
 
-function modelConfig(model) {
+function modalities(value) {
+  return Array.isArray(value) ? value.filter((item) => MODALITIES.includes(item)) : [];
+}
+
+// modelInfo returns an OpenCode 2 Model.Info. id is the OpenCode model key;
+// modelID is what the gateway receives.
+function modelInfo(providerID, model) {
+  if (typeof model.id !== "string" || model.id.length === 0) return undefined;
   const requestID = typeof model.native_id === "string" && model.native_id.length > 0
     ? model.native_id
     : model.id;
-  if (typeof model.id !== "string" || model.id.length === 0 || typeof requestID !== "string" || requestID.length === 0) {
-    return undefined;
-  }
-
-  const out = {
-    id: requestID,
-    name: typeof model.name === "string" && model.name.length > 0 ? model.name : model.id,
-  };
-  const input = Array.isArray(model.architecture?.input_modalities)
-    ? model.architecture.input_modalities.filter((item) => ["text", "audio", "image", "video", "pdf"].includes(item))
-    : [];
-  const output = Array.isArray(model.architecture?.output_modalities)
-    ? model.architecture.output_modalities.filter((item) => ["text", "audio", "image", "video", "pdf"].includes(item))
-    : [];
-  if (input.length > 0 || output.length > 0) {
-    out.modalities = {};
-    if (input.length > 0) out.modalities.input = input;
-    if (output.length > 0) out.modalities.output = output;
-  }
-  if (input.includes("image") || input.includes("pdf")) out.attachment = true;
-  if (Array.isArray(model.supported_parameters) && model.supported_parameters.includes("tools")) {
-    out.tool_call = true;
-  }
-
+  const input = modalities(model.architecture?.input_modalities);
+  const output = modalities(model.architecture?.output_modalities);
   const context = positiveNumber(model.limits?.context_window) ?? 128000;
-  const outputLimit = positiveNumber(model.limits?.max_output_tokens) ?? Math.min(context, 4096);
-  out.limit = { context, output: outputLimit };
-  return out;
+  return {
+    id: modelKey(model),
+    modelID: requestID,
+    providerID,
+    name: typeof model.name === "string" && model.name.length > 0 ? model.name : model.id,
+    capabilities: {
+      tools: Array.isArray(model.supported_parameters) && model.supported_parameters.includes("tools"),
+      input: input.length > 0 ? input : ["text"],
+      output: output.length > 0 ? output : ["text"],
+    },
+    variants: [],
+    time: { released: 0 },
+    cost: [],
+    status: "active",
+    enabled: true,
+    limit: {
+      context,
+      output: positiveNumber(model.limits?.max_output_tokens) ?? Math.min(context, 4096),
+    },
+  };
 }
 
 function modelKey(model) {
@@ -225,8 +229,10 @@ function modelKey(model) {
   return model.id.startsWith(prefix) ? model.id.slice(prefix.length) : model.id;
 }
 
-function injectIntegrationProviders(config, integrations) {
-  const injected = {};
+// integrationProviders converts discovered catalogs into OpenCode 2 provider
+// records, one per (integration, upstream provider, wire protocol).
+function integrationProviders(integrations) {
+  const records = [];
   let omittedChatGPT = false;
   const ordered = [...integrations].sort((a, b) => {
     const left = `${a.team ? "1" : "0"}\0${a.name}\0${a.baseURL}`;
@@ -244,55 +250,62 @@ function injectIntegrationProviders(config, integrations) {
       }
       const adapter = adapterFor(model);
       if (!adapter) continue;
-      const entry = modelConfig(model);
-      if (!entry) continue;
-      const groupKey = `${model.provider}\0${adapter}`;
-      let group = groups.get(groupKey);
+      const providerID = baseProviderID(integration, model.provider, adapter);
+      const info = modelInfo(providerID, model);
+      if (!info) continue;
+      let group = groups.get(providerID);
       if (!group) {
-        group = { provider: model.provider, adapter, models: {} };
-        groups.set(groupKey, group);
+        group = {
+          info: {
+            id: providerID,
+            name: providerDisplayName(integration, model.provider, adapter),
+            activation: "enabled",
+            package: ADAPTERS[adapter].package,
+            settings: {
+              baseURL: `${integration.baseURL.replace(/\/+$/, "")}/${encodeURIComponent(model.provider)}/v1`,
+              apiKey: "implicit",
+            },
+          },
+          models: new Map(),
+        };
+        groups.set(providerID, group);
       }
-      group.models[modelKey(model)] = entry;
+      group.models.set(info.id, info);
     }
-
-    for (const { provider, adapter, models } of groups.values()) {
-      const providerID = baseProviderID(integration, provider, adapter);
-      injected[providerID] = {
-        npm: ADAPTERS[adapter].npm,
-        name: providerDisplayName(integration, provider, adapter),
-        options: {
-          baseURL: `${integration.baseURL.replace(/\/+$/, "")}/${encodeURIComponent(provider)}/v1`,
-          apiKey: "implicit",
-        },
-        models,
-      };
+    for (const group of groups.values()) {
+      records.push({ info: group.info, models: [...group.models.values()] });
     }
   }
-
-  // Copy-on-write prevents injected providers from leaking into the user's
-  // opencode.json during a UI read-modify-write. Explicit user providers win.
-  config.provider = { ...injected, ...(config.provider ?? {}) };
 
   if (omittedChatGPT) {
     console.warn("[opencode-exe-dev] ChatGPT-account models are not yet supported by the OpenCode integration");
   }
+  return records;
 }
 
-export default async function exeDevPlugin() {
-  return {
-    config: async (config) => {
-      if (!runningOnExeDev() || integrationsDisabled()) return;
-
-      let integrations;
-      try {
-        integrations = reflectionIntegrations(await fetchJSON(REFLECTION_INTEGRATIONS_URL));
-      } catch (error) {
-        console.warn(`[opencode-exe-dev] LLM integration reflection fetch failed: ${error?.message || error}`);
-        return;
-      }
-      const discovered = (await Promise.all(integrations.map(fetchIntegration))).filter(Boolean);
-      if (discovered.length === 0) return;
-      injectIntegrationProviders(config, discovered);
-    },
-  };
+async function discoverProviders() {
+  let integrations;
+  try {
+    integrations = reflectionIntegrations(await fetchJSON(REFLECTION_INTEGRATIONS_URL));
+  } catch (error) {
+    console.warn(`[opencode-exe-dev] LLM integration reflection fetch failed: ${error?.message || error}`);
+    return [];
+  }
+  const discovered = (await Promise.all(integrations.map(fetchIntegration))).filter(Boolean);
+  return integrationProviders(discovered);
 }
+
+// OpenCode 2 plugin. Plugin.define from @opencode/plugin is the identity
+// function, so a plain object avoids a runtime dependency.
+export default {
+  id: "exe.dev",
+  async setup(ctx) {
+    if (!runningOnExeDev() || integrationsDisabled()) return;
+    const providers = await discoverProviders();
+    if (providers.length === 0) return;
+    await ctx.provider.transform((editor) => {
+      // User config with the same provider ID overlays these definitions.
+      for (const provider of providers) editor.add(provider);
+    });
+  },
+};

@@ -222,10 +222,10 @@ func TestOpenCodeInstallerForwardsVersion(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{"exeuntu", "install", "opencode", "--version", "v1.18.18"}, &stdout, &stderr); err != nil {
+	if err := run([]string{"exeuntu", "install", "opencode", "--version", "v2.0.32"}, &stdout, &stderr); err != nil {
 		t.Fatalf("install opencode: %v", err)
 	}
-	if got.Agent != agentupdate.AgentOpenCode || got.Version != "v1.18.18" {
+	if got.Agent != agentupdate.AgentOpenCode || got.Version != "v2.0.32" {
 		t.Fatalf("updater options = %#v", got)
 	}
 	if stderr.Len() != 0 {

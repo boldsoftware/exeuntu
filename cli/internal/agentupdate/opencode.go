@@ -2,9 +2,13 @@ package agentupdate
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha512"
 	"crypto/subtle"
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,78 +20,77 @@ import (
 	"strings"
 )
 
+// OpenCode 2 ships each platform's native CLI as an npm package; the npm
+// registry metadata carries the tarball URL and its sha512 integrity.
 const (
 	DefaultOpenCodeInstallPath       = "/usr/local/bin/opencode"
-	defaultOpenCodeLatestURL         = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
-	defaultOpenCodeReleaseBase       = "https://api.github.com/repos/anomalyco/opencode/releases/tags"
+	defaultOpenCodeRegistry          = "https://registry.npmjs.org"
+	openCodeArchiveBinary            = "package/bin/opencode"
 	maxOpenCodeArchiveSize     int64 = 256 << 20
 	maxOpenCodeBinarySize      int64 = 512 << 20
 )
 
-type openCodeRelease struct {
-	TagName string                 `json:"tag_name"`
-	Assets  []openCodeReleaseAsset `json:"assets"`
-}
+const (
+	defaultOpenCodeConfigDir    = "/etc/opencode"
+	defaultOpenCodeLegacyPlugin = "/home/exedev/.config/opencode/plugins/exe-dev.js"
+	// openCodePluginMarker appears in every exeuntu-shipped version of the
+	// plugin, so a home-directory copy carrying it is ours to remove.
+	openCodePluginMarker = "[opencode-exe-dev]"
+)
 
-type openCodeReleaseAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-	Digest             string `json:"digest"`
+// The exe.dev plugin and config ship with exeuntu so that updating the
+// OpenCode binary also updates the plugin it needs. They are installed into
+// OpenCode's system config directory, which applies to every user.
+var (
+	//go:embed opencode-plugin/exe-dev.js
+	openCodePlugin []byte
+	//go:embed opencode-plugin/opencode.json
+	openCodeConfig []byte
+)
+
+type openCodePackage struct {
+	Version string `json:"version"`
+	Dist    struct {
+		Tarball   string `json:"tarball"`
+		Integrity string `json:"integrity"`
+	} `json:"dist"`
 }
 
 func updateOpenCode(ctx context.Context, opts Options) (Result, error) {
 	u := newUpdater(opts.HTTPClient, opts.Stdout)
-	latestURL := opts.LatestURL
-	if latestURL == "" {
-		latestURL = defaultOpenCodeLatestURL
-	}
-	releaseBase := opts.ReleaseBase
-	if releaseBase == "" {
-		releaseBase = defaultOpenCodeReleaseBase
+	registry := opts.ReleaseBase
+	if registry == "" {
+		registry = defaultOpenCodeRegistry
 	}
 	installPath := opts.InstallPath
 	if installPath == "" {
 		installPath = DefaultOpenCodeInstallPath
 	}
+	pkgName, err := openCodePackageName(runtime.GOARCH)
+	if err != nil {
+		return Result{}, err
+	}
 
-	releaseURL := latestURL
-	requestedVersion := ""
+	version := "latest"
 	if strings.TrimSpace(opts.Version) != "" {
-		version, err := normalizeOpenCodeVersion(opts.Version)
+		version, err = normalizeOpenCodeVersion(opts.Version)
 		if err != nil {
 			return Result{}, err
 		}
-		requestedVersion = version
-		releaseURL = joinURL(releaseBase, "v"+requestedVersion)
 	}
-	release, err := fetchOpenCodeRelease(ctx, u, releaseURL)
+	pkg, err := fetchOpenCodePackage(ctx, u, joinURL(registry, pkgName, version))
 	if err != nil {
 		return Result{}, err
 	}
-	version, err := normalizeOpenCodeVersion(release.TagName)
+	if version != "latest" && pkg.Version != version {
+		return Result{}, fmt.Errorf("opencode package version = %q, want %s", pkg.Version, version)
+	}
+	version = pkg.Version
+	wantSum, err := parseSHA512Integrity(pkg.Dist.Integrity)
 	if err != nil {
-		return Result{}, fmt.Errorf("opencode release tag: %w", err)
+		return Result{}, fmt.Errorf("opencode package %s@%s sha512 integrity: %w", pkgName, version, err)
 	}
-	if requestedVersion != "" && version != requestedVersion {
-		return Result{}, fmt.Errorf("opencode release tag = %q, want v%s", release.TagName, requestedVersion)
-	}
-
-	assetName, err := openCodeAssetName(runtime.GOARCH)
-	if err != nil {
-		return Result{}, err
-	}
-	asset, err := findOpenCodeAsset(release, assetName)
-	if err != nil {
-		return Result{}, err
-	}
-	wantChecksum, err := parseSHA256(asset.Digest)
-	if err != nil {
-		if strings.TrimSpace(asset.Digest) == "" {
-			return Result{}, fmt.Errorf("opencode release asset %s missing sha256 digest", assetName)
-		}
-		return Result{}, fmt.Errorf("opencode release asset %s digest: %w", assetName, err)
-	}
-	body, err := u.get(ctx, asset.BrowserDownloadURL, "download opencode")
+	body, err := u.get(ctx, pkg.Dist.Tarball, "download opencode")
 	if err != nil {
 		return Result{}, err
 	}
@@ -96,13 +99,14 @@ func updateOpenCode(ctx context.Context, opts Options) (Result, error) {
 	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
 		return Result{}, fmt.Errorf("create opencode install dir: %w", err)
 	}
-	archive, err := writeBoundedOpenCodeArchive(filepath.Dir(installPath), body, maxOpenCodeArchiveSize)
+	hash := sha512.New()
+	archive, err := writeBoundedOpenCodeArchive(filepath.Dir(installPath), io.TeeReader(body, hash), maxOpenCodeArchiveSize)
 	if err != nil {
 		return Result{}, err
 	}
 	defer os.Remove(archive.path)
-	if subtle.ConstantTimeCompare(archive.sha256, wantChecksum) != 1 {
-		return Result{}, fmt.Errorf("verify opencode archive checksum: got %x, want %x", archive.sha256, wantChecksum)
+	if subtle.ConstantTimeCompare(hash.Sum(nil), wantSum) != 1 {
+		return Result{}, errors.New("verify opencode archive integrity: sha512 mismatch")
 	}
 
 	exe, err := extractOpenCodeExecutable(installPath, archive.path)
@@ -112,44 +116,100 @@ func updateOpenCode(ctx context.Context, opts Options) (Result, error) {
 	if err := installExecutable(installPath, exe, string(AgentOpenCode)); err != nil {
 		return Result{}, err
 	}
+	if err := installOpenCodeConfig(opts); err != nil {
+		return Result{}, err
+	}
 	fmt.Fprintf(u.stdout, "opencode: updated to %s\n", version)
 	return Result{Agent: AgentOpenCode, Version: version, Path: installPath}, nil
 }
 
-func fetchOpenCodeRelease(ctx context.Context, u updater, releaseURL string) (openCodeRelease, error) {
-	body, err := u.get(ctx, releaseURL, "fetch opencode release")
+func installOpenCodeConfig(opts Options) error {
+	dir := opts.OpenCodeConfigDir
+	if dir == "" {
+		dir = defaultOpenCodeConfigDir
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "plugins", "exe-dev.js"), openCodePlugin); err != nil {
+		return fmt.Errorf("install opencode plugin: %w", err)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "opencode.json"), openCodeConfig); err != nil {
+		return fmt.Errorf("install opencode config: %w", err)
+	}
+
+	// OpenCode 2 cannot load the V1 plugin older images put in the home
+	// directory, and logs an error for it on every start.
+	legacy := opts.OpenCodeLegacyPlugin
+	if legacy == "" {
+		legacy = defaultOpenCodeLegacyPlugin
+	}
+	old, err := os.ReadFile(legacy)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return openCodeRelease{}, err
+		return fmt.Errorf("read legacy opencode plugin: %w", err)
+	}
+	if !bytes.Contains(old, []byte(openCodePluginMarker)) {
+		return nil
+	}
+	if err := os.Remove(legacy); err != nil {
+		return fmt.Errorf("remove legacy opencode plugin: %w", err)
+	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := writeTempFile(dir, "."+filepath.Base(path)+"-", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.path)
+	if err := os.Chmod(tmp.path, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.path, path)
+}
+
+func fetchOpenCodePackage(ctx context.Context, u updater, url string) (openCodePackage, error) {
+	body, err := u.get(ctx, url, "fetch opencode package")
+	if err != nil {
+		return openCodePackage{}, err
 	}
 	defer body.Close()
-	var release openCodeRelease
-	if err := json.NewDecoder(io.LimitReader(body, 4<<20)).Decode(&release); err != nil {
-		return openCodeRelease{}, fmt.Errorf("decode opencode release: %w", err)
+	var pkg openCodePackage
+	if err := json.NewDecoder(io.LimitReader(body, 4<<20)).Decode(&pkg); err != nil {
+		return openCodePackage{}, fmt.Errorf("decode opencode package: %w", err)
 	}
-	return release, nil
+	return pkg, nil
 }
 
-func findOpenCodeAsset(release openCodeRelease, name string) (openCodeReleaseAsset, error) {
-	for _, asset := range release.Assets {
-		if asset.Name != name {
-			continue
-		}
-		if strings.TrimSpace(asset.BrowserDownloadURL) == "" {
-			return asset, fmt.Errorf("opencode release asset %s missing download URL", name)
-		}
-		return asset, nil
+// parseSHA512Integrity parses an npm Subresource Integrity value.
+func parseSHA512Integrity(value string) ([]byte, error) {
+	encoded, ok := strings.CutPrefix(strings.TrimSpace(value), "sha512-")
+	if !ok {
+		return nil, fmt.Errorf("unsupported value %q", value)
 	}
-	return openCodeReleaseAsset{}, fmt.Errorf("opencode release missing asset %s", name)
+	sum, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if len(sum) != sha512.Size {
+		return nil, fmt.Errorf("got %d bytes, want %d", len(sum), sha512.Size)
+	}
+	return sum, nil
 }
 
-func openCodeAssetName(goarch string) (string, error) {
+func openCodePackageName(goarch string) (string, error) {
 	switch goarch {
 	case "amd64":
 		// The baseline build runs on older x86-64 CPUs without AVX2, so an
 		// exeuntu image built on one host remains portable across the fleet.
-		return "opencode-linux-x64-baseline.tar.gz", nil
+		return "@opencode/cli-linux-x64-baseline", nil
 	case "arm64":
-		return "opencode-linux-arm64.tar.gz", nil
+		return "@opencode/cli-linux-arm64", nil
 	default:
 		return "", fmt.Errorf("unsupported architecture: %s", goarch)
 	}
@@ -214,7 +274,7 @@ func extractOpenCodeExecutable(installPath, archivePath string) (tempExecutable,
 			removeTempExecutable(executable)
 			return tempExecutable{}, fmt.Errorf("extract opencode archive: invalid path %q", header.Name)
 		}
-		if name != "opencode" {
+		if name != openCodeArchiveBinary {
 			continue
 		}
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {

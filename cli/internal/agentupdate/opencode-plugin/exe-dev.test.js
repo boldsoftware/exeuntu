@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import exeDevPlugin from "./exe-dev.js";
+import plugin from "./exe-dev.js";
 
 const reflectionURL = "https://reflection.int.exe.xyz/integrations";
 
@@ -16,30 +16,57 @@ function catalog(models) {
   return { schema_version: 1, models };
 }
 
-async function configureWith(fetchImpl, config = {}) {
+// setupWith runs the plugin against a fake OpenCode 2 context with the given
+// fetch and environment, and returns the provider records it registered,
+// keyed by provider ID.
+async function setupWith(fetchImpl, env = {}) {
+  env = { EXE_DEV_PLUGIN_TEST: "1", EXE_DEV_DISABLE_GATEWAY: undefined, ...env };
   const oldFetch = globalThis.fetch;
-  const oldTestMode = process.env.EXE_DEV_PLUGIN_TEST;
-  const oldDisable = process.env.EXE_DEV_DISABLE_GATEWAY;
+  const oldEnv = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  const setEnv = (values) => {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
   globalThis.fetch = fetchImpl;
-  process.env.EXE_DEV_PLUGIN_TEST = "1";
-  delete process.env.EXE_DEV_DISABLE_GATEWAY;
+  setEnv(env);
+  const providers = {};
+  const editor = {
+    add: (record) => {
+      assert.equal(providers[record.info.id], undefined, `duplicate provider ${record.info.id}`);
+      providers[record.info.id] = record;
+    },
+  };
   try {
-    const hooks = await exeDevPlugin({});
-    assert.equal(typeof hooks.config, "function");
-    await hooks.config(config);
-    return config;
+    await plugin.setup({ provider: { transform: async (callback) => callback(editor) } });
   } finally {
     globalThis.fetch = oldFetch;
-    if (oldTestMode === undefined) delete process.env.EXE_DEV_PLUGIN_TEST;
-    else process.env.EXE_DEV_PLUGIN_TEST = oldTestMode;
-    if (oldDisable === undefined) delete process.env.EXE_DEV_DISABLE_GATEWAY;
-    else process.env.EXE_DEV_DISABLE_GATEWAY = oldDisable;
+    setEnv(oldEnv);
   }
+  return providers;
+}
+
+// captureWarnings runs fn and returns its result with the console.warn
+// messages it logged.
+async function captureWarnings(fn) {
+  const warnings = [];
+  const oldWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    return { result: await fn(), warnings };
+  } finally {
+    console.warn = oldWarn;
+  }
+}
+
+function modelsByID(record) {
+  return Object.fromEntries(record.models.map((model) => [model.id, model]));
 }
 
 test("discovers LLM integrations and injects protocol-specific providers", async () => {
   const requested = [];
-  const config = await configureWith(async (url) => {
+  const providers = await setupWith(async (url) => {
     requested.push(String(url));
     switch (String(url)) {
       case reflectionURL:
@@ -104,46 +131,52 @@ test("discovers LLM integrations and injects protocol-specific providers", async
     "https://llm.int.exe.xyz/models.json",
     "https://shared.team.exe.xyz/models.json",
   ]));
-  assert.equal(config.model, undefined, "plugin must not silently change the user's default model");
-
-  const openai = config.provider["exe-p-3-llm-3-llm-6-openai-responses"];
-  assert.equal(openai.npm, "@ai-sdk/openai");
-  assert.equal(openai.options.baseURL, "https://llm.int.exe.xyz/openai/v1");
-  assert.equal(openai.options.apiKey, "implicit");
-  assert.deepEqual(openai.models["gpt-test"], {
-    id: "gpt-test-native",
+  const openai = providers["exe-p-3-llm-3-llm-6-openai-responses"];
+  assert.deepEqual(openai.info, {
+    id: "exe-p-3-llm-3-llm-6-openai-responses",
+    name: "exe.dev llm · openai · OpenAI Responses",
+    activation: "enabled",
+    package: "@opencode/ai/providers/openai/responses",
+    settings: { baseURL: "https://llm.int.exe.xyz/openai/v1", apiKey: "implicit" },
+  });
+  assert.deepEqual(modelsByID(openai)["gpt-test"], {
+    id: "gpt-test",
+    modelID: "gpt-test-native",
+    providerID: "exe-p-3-llm-3-llm-6-openai-responses",
     name: "GPT Test",
-    attachment: true,
-    tool_call: true,
+    capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+    variants: [],
+    time: { released: 0 },
+    cost: [],
+    status: "active",
+    enabled: true,
     limit: { context: 200000, output: 32000 },
-    modalities: { input: ["text", "image"], output: ["text"] },
   });
 
-  const anthropic = config.provider["exe-p-3-llm-3-llm-9-anthropic-messages"];
-  assert.equal(anthropic.npm, "@ai-sdk/anthropic");
-  assert.equal(anthropic.options.baseURL, "https://llm.int.exe.xyz/anthropic/v1");
-  assert.equal(anthropic.models["claude-test"].id, "claude-test-native");
-  assert.deepEqual(anthropic.models["claude-test"].limit, { context: 100000, output: 4096 });
+  const anthropic = providers["exe-p-3-llm-3-llm-9-anthropic-messages"];
+  assert.equal(anthropic.info.package, "@opencode/ai/providers/anthropic");
+  assert.equal(anthropic.info.settings.baseURL, "https://llm.int.exe.xyz/anthropic/v1");
+  const claude = modelsByID(anthropic)["claude-test"];
+  assert.equal(claude.modelID, "claude-test-native");
+  assert.equal(claude.capabilities.tools, false);
+  assert.deepEqual(claude.capabilities.input, ["text"]);
+  assert.deepEqual(claude.limit, { context: 100000, output: 4096 });
 
-  const chat = config.provider["exe-p-3-llm-3-llm-9-fireworks-chat"];
-  assert.equal(chat.npm, "@ai-sdk/openai-compatible");
-  assert.equal(chat.options.baseURL, "https://llm.int.exe.xyz/fireworks/v1");
-  assert.equal(chat.models["glm-test"].id, "accounts/fireworks/models/glm-test");
-  assert.equal(chat.models["embedding-test"], undefined);
+  const chat = providers["exe-p-3-llm-3-llm-9-fireworks-chat"];
+  assert.equal(chat.info.package, "@opencode/ai/providers/openai-compatible");
+  assert.equal(chat.info.settings.baseURL, "https://llm.int.exe.xyz/fireworks/v1");
+  assert.equal(modelsByID(chat)["glm-test"].modelID, "accounts/fireworks/models/glm-test");
+  assert.equal(modelsByID(chat)["embedding-test"], undefined);
 
-  const teamResponses = config.provider["exe-t-6-shared-6-shared-3-xai-responses"];
-  assert.equal(teamResponses.npm, "@ai-sdk/openai");
-  assert.equal(teamResponses.options.baseURL, "https://shared.team.exe.xyz/xai/v1");
-  assert.equal(teamResponses.models["grok-test"].id, "grok-test-native");
+  const teamResponses = providers["exe-t-6-shared-6-shared-3-xai-responses"];
+  assert.equal(teamResponses.info.package, "@opencode/ai/providers/openai/responses");
+  assert.equal(teamResponses.info.settings.baseURL, "https://shared.team.exe.xyz/xai/v1");
+  assert.equal(modelsByID(teamResponses)["grok-test"].modelID, "grok-test-native");
+  assert.equal(Object.keys(providers).length, 4);
 });
 
-test("uses integration help URLs and preserves user-owned provider config", async () => {
-  const userProvider = { name: "mine", models: { custom: { name: "Custom" } } };
-  const input = {
-    provider: { "exe-p-3-llm-10-custom-llm-6-openai-responses": userProvider },
-  };
-  const originalProviderMap = input.provider;
-  const config = await configureWith(async (url) => {
+test("uses integration help URLs", async () => {
+  const providers = await setupWith(async (url) => {
     switch (String(url)) {
       case reflectionURL:
         return response({
@@ -163,15 +196,17 @@ test("uses integration help URLs and preserves user-owned provider config", asyn
       default:
         throw new Error(`unexpected URL ${url}`);
     }
-  }, input);
+  });
 
-  assert.equal(config.provider["exe-p-3-llm-10-custom-llm-6-openai-responses"], userProvider);
-  assert.notEqual(config.provider, originalProviderMap);
-  assert.deepEqual(originalProviderMap, { "exe-p-3-llm-10-custom-llm-6-openai-responses": userProvider });
+  assert.deepEqual(Object.keys(providers), ["exe-p-3-llm-10-custom-llm-6-openai-responses"]);
+  assert.equal(
+    providers["exe-p-3-llm-10-custom-llm-6-openai-responses"].info.settings.baseURL,
+    "https://custom-llm.int.exe.xyz/openai/v1",
+  );
 });
 
 test("provider IDs are stable when sanitized integration identities collide", async () => {
-  const configureOrder = async (integrations) => configureWith(async (url) => {
+  const setupOrder = async (integrations) => setupWith(async (url) => {
     switch (String(url)) {
       case reflectionURL:
         return response({ integrations });
@@ -191,18 +226,18 @@ test("provider IDs are stable when sanitized integration identities collide", as
   });
   const one = { name: "dup", type: "llm", help: "https://one.int.exe.xyz/v1" };
   const two = { name: "dup", type: "llm", help: "https://two.int.exe.xyz/v1" };
-  const first = await configureOrder([one, two]);
-  const second = await configureOrder([two, one]);
+  const first = await setupOrder([one, two]);
+  const second = await setupOrder([two, one]);
 
-  const providerIDsByBaseURL = (config) => Object.fromEntries(
-    Object.entries(config.provider).map(([id, provider]) => [provider.options.baseURL, id]),
+  const providerIDsByBaseURL = (providers) => Object.fromEntries(
+    Object.entries(providers).map(([id, provider]) => [provider.info.settings.baseURL, id]),
   );
   assert.deepEqual(providerIDsByBaseURL(first), providerIDsByBaseURL(second));
-  assert.equal(Object.keys(first.provider).length, 2);
+  assert.equal(Object.keys(first).length, 2);
 });
 
 test("personal and team integration scopes cannot collide", async () => {
-  const config = await configureWith(async (url) => {
+  const providers = await setupWith(async (url) => {
     switch (String(url)) {
       case reflectionURL:
         return response({ integrations: [
@@ -222,13 +257,13 @@ test("personal and team integration scopes cannot collide", async () => {
     }
   });
 
-  assert.ok(config.provider["exe-p-8-team-foo-8-team-foo-6-openai-responses"]);
-  assert.ok(config.provider["exe-t-3-foo-3-foo-6-openai-responses"]);
-  assert.equal(Object.keys(config.provider).length, 2);
+  assert.ok(providers["exe-p-8-team-foo-8-team-foo-6-openai-responses"]);
+  assert.ok(providers["exe-t-3-foo-3-foo-6-openai-responses"]);
+  assert.equal(Object.keys(providers).length, 2);
 });
 
 test("provider ID component boundaries cannot collide", async () => {
-  const config = await configureWith(async (url) => {
+  const providers = await setupWith(async (url) => {
     switch (String(url)) {
       case reflectionURL:
         return response({ integrations: [
@@ -254,43 +289,36 @@ test("provider ID component boundaries cannot collide", async () => {
     }
   });
 
-  assert.ok(config.provider["exe-p-7-foo-bar-7-foo-bar-6-openai-responses"]);
-  assert.ok(config.provider["exe-p-3-foo-3-foo-10-bar-openai-responses"]);
-  assert.equal(Object.keys(config.provider).length, 2);
+  assert.ok(providers["exe-p-7-foo-bar-7-foo-bar-6-openai-responses"]);
+  assert.ok(providers["exe-p-3-foo-3-foo-10-bar-openai-responses"]);
+  assert.equal(Object.keys(providers).length, 2);
 });
 
 test("omits ChatGPT-account models that need payload rewriting", async () => {
-  const warnings = [];
-  const oldWarn = console.warn;
-  console.warn = (message) => warnings.push(String(message));
-  try {
-    const config = await configureWith(async (url) => {
-      switch (String(url)) {
-        case reflectionURL:
-          return response({ integrations: [{ name: "llm", type: "llm" }] });
-        case "https://llm.int.exe.xyz/models.json":
-          return response(catalog([{
-            id: "openai/chatgpt-test",
-            provider: "openai",
-            native_id: "chatgpt-test",
-            apis: ["openai_responses"],
-            exe_dev: { mode: "chatgpt" },
-          }]));
-        default:
-          throw new Error(`unexpected URL ${url}`);
-      }
-    });
-    assert.deepEqual(config.provider, {});
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /ChatGPT-account models are not yet supported/);
-  } finally {
-    console.warn = oldWarn;
-  }
+  const { result: providers, warnings } = await captureWarnings(() => setupWith(async (url) => {
+    switch (String(url)) {
+      case reflectionURL:
+        return response({ integrations: [{ name: "llm", type: "llm" }] });
+      case "https://llm.int.exe.xyz/models.json":
+        return response(catalog([{
+          id: "openai/chatgpt-test",
+          provider: "openai",
+          native_id: "chatgpt-test",
+          apis: ["openai_responses"],
+          exe_dev: { mode: "chatgpt" },
+        }]));
+      default:
+        throw new Error(`unexpected URL ${url}`);
+    }
+  }));
+  assert.deepEqual(providers, {});
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /ChatGPT-account models are not yet supported/);
 });
 
 test("retries once when the first fetch attempt fails", async () => {
   const requested = [];
-  const config = await configureWith(async (url) => {
+  const providers = await setupWith(async (url) => {
     requested.push(String(url));
     const attempt = requested.filter((seen) => seen === String(url)).length;
     if (attempt === 1) throw new Error("The operation timed out.");
@@ -315,80 +343,44 @@ test("retries once when the first fetch attempt fails", async () => {
     "https://llm.int.exe.xyz/models.json",
     "https://llm.int.exe.xyz/models.json",
   ]);
-  assert.ok(config.provider["exe-p-3-llm-3-llm-6-openai-responses"]);
+  assert.ok(providers["exe-p-3-llm-3-llm-6-openai-responses"]);
 });
 
 // An HTTP response means the endpoint answered: probing base URL candidates
 // 404s by design, and retrying those would double discovery latency on the
 // path the retry exists to keep fast.
+// An HTTP response means the endpoint answered: probing base URL candidates
+// 404s by design, and retrying those would double discovery latency on the
+// path the retry exists to keep fast.
 test("does not retry a fetch the server answered with an error status", async () => {
-  const warnings = [];
-  const oldWarn = console.warn;
-  console.warn = (message) => warnings.push(String(message));
   const requested = [];
-  try {
-    const config = await configureWith(async (url) => {
-      requested.push(String(url));
-      return response({ error: "unavailable" }, 503);
-    });
-    assert.deepEqual(requested, [reflectionURL]);
-    assert.deepEqual(config, {});
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /reflection fetch failed/);
-  } finally {
-    console.warn = oldWarn;
-  }
+  const { result: providers, warnings } = await captureWarnings(() => setupWith(async (url) => {
+    requested.push(String(url));
+    return response({ error: "unavailable" }, 503);
+  }));
+  assert.deepEqual(requested, [reflectionURL]);
+  assert.deepEqual(providers, {});
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /reflection fetch failed/);
 });
 
 test("fails open when reflection or catalogs are unavailable", async () => {
-  const warnings = [];
-  const oldWarn = console.warn;
-  console.warn = (message) => warnings.push(String(message));
-  try {
-    const config = await configureWith(async () => {
-      throw new Error("offline");
-    }, { provider: { mine: { name: "Mine" } } });
-    assert.deepEqual(config, { provider: { mine: { name: "Mine" } } });
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /reflection fetch failed/);
-  } finally {
-    console.warn = oldWarn;
-  }
+  const { result: providers, warnings } = await captureWarnings(() => setupWith(async () => {
+    throw new Error("offline");
+  }));
+  assert.deepEqual(providers, {});
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /reflection fetch failed/);
 });
 
+const noFetch = async () => {
+  throw new Error("fetch should not run");
+};
+
 test("kill switch disables discovery", async () => {
-  const oldFetch = globalThis.fetch;
-  const oldTestMode = process.env.EXE_DEV_PLUGIN_TEST;
-  const oldDisable = process.env.EXE_DEV_DISABLE_GATEWAY;
-  globalThis.fetch = async () => {
-    throw new Error("fetch should not run");
-  };
-  process.env.EXE_DEV_PLUGIN_TEST = "1";
-  process.env.EXE_DEV_DISABLE_GATEWAY = "true";
-  try {
-    const hooks = await exeDevPlugin({});
-    const config = {};
-    await hooks.config(config);
-    assert.deepEqual(config, {});
-  } finally {
-    globalThis.fetch = oldFetch;
-    if (oldTestMode === undefined) delete process.env.EXE_DEV_PLUGIN_TEST;
-    else process.env.EXE_DEV_PLUGIN_TEST = oldTestMode;
-    if (oldDisable === undefined) delete process.env.EXE_DEV_DISABLE_GATEWAY;
-    else process.env.EXE_DEV_DISABLE_GATEWAY = oldDisable;
-  }
+  assert.deepEqual(await setupWith(noFetch, { EXE_DEV_DISABLE_GATEWAY: "true" }), {});
 });
 
 test("does nothing outside exeuntu", async () => {
-  const oldTestMode = process.env.EXE_DEV_PLUGIN_TEST;
-  process.env.EXE_DEV_PLUGIN_TEST = "0";
-  try {
-    const hooks = await exeDevPlugin({});
-    const config = {};
-    await hooks.config(config);
-    assert.deepEqual(config, {});
-  } finally {
-    if (oldTestMode === undefined) delete process.env.EXE_DEV_PLUGIN_TEST;
-    else process.env.EXE_DEV_PLUGIN_TEST = oldTestMode;
-  }
+  assert.deepEqual(await setupWith(noFetch, { EXE_DEV_PLUGIN_TEST: "0" }), {});
 });

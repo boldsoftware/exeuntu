@@ -30,6 +30,13 @@ type Options struct {
 	Stdout      io.Writer
 	LatestURL   string
 	ReleaseBase string
+
+	// OpenCodeConfigDir is OpenCode's system config directory, which
+	// exeuntu owns. Default: /etc/opencode.
+	OpenCodeConfigDir string
+	// OpenCodeLegacyPlugin is where older exeuntu images put the exe.dev
+	// plugin. Default: /home/exedev/.config/opencode/plugins/exe-dev.js.
+	OpenCodeLegacyPlugin string
 }
 
 type Result struct {

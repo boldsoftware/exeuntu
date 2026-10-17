@@ -299,29 +299,14 @@ RUN chmod 644 /etc/systemd/system/exe-setup.service && \
 # It would be better if you could indicate that via an env variable or something.
 COPY init-wrapper.sh /usr/local/bin/init
 
-# Create config directories for LLM agents. The OpenCode plugin has no
-# dependencies; pre-creating node_modules avoids a first-run SDK install.
+# Create config directories for LLM agents. `exeuntu update opencode`
+# installs OpenCode's exe.dev plugin and config under /etc/opencode.
 RUN mkdir -p \
       /home/exedev/.claude \
       /home/exedev/.codex \
       /home/exedev/.pi \
-      /home/exedev/.config/opencode/plugins \
-      /home/exedev/.config/opencode/node_modules && \
+      /home/exedev/.config/opencode && \
     chown -R exedev:exedev /home/exedev/.claude /home/exedev/.codex /home/exedev/.pi /home/exedev/.config/opencode
-
-# Disable OpenCode's own updater; exeuntu owns the system binary.
-COPY opencode.json /home/exedev/.config/opencode/opencode.json
-# Dynamically register models from attached exe.dev LLM integrations.
-COPY opencode-plugin/exe-dev.js /home/exedev/.config/opencode/plugins/exe-dev.js
-# OpenCode otherwise installs its plugin SDK on first start even though this
-# dependency-free plugin does not import it. A minimal lock avoids that fetch.
-COPY opencode-plugin/runtime-dependencies.json /home/exedev/.config/opencode/package.json
-COPY opencode-plugin/runtime-lock.json /home/exedev/.config/opencode/package-lock.json
-RUN chown exedev:exedev \
-      /home/exedev/.config/opencode/opencode.json \
-      /home/exedev/.config/opencode/package.json \
-      /home/exedev/.config/opencode/package-lock.json \
-      /home/exedev/.config/opencode/plugins/exe-dev.js
 
 # Copy LLM agent instructions to Claude, Codex, OpenCode, Pi, and Shelley config directories
 # Shelley and OpenCode use ~/.config/ (XDG convention).
@@ -342,6 +327,7 @@ RUN exeuntu update codex && \
     /usr/local/bin/codex --version
 RUN exeuntu update opencode && \
     test -x /usr/local/bin/opencode && \
+    test -f /etc/opencode/plugins/exe-dev.js && \
     HOME=/tmp/opencode-smoke /usr/local/bin/opencode --version && \
     rm -rf /tmp/opencode-smoke
 

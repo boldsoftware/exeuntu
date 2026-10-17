@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,146 +18,104 @@ import (
 	"testing"
 )
 
-func TestOpenCodeAssetName(t *testing.T) {
+func TestOpenCodePackageName(t *testing.T) {
 	for _, tc := range []struct {
 		goarch string
 		want   string
 	}{
-		{goarch: "amd64", want: "opencode-linux-x64-baseline.tar.gz"},
-		{goarch: "arm64", want: "opencode-linux-arm64.tar.gz"},
+		{goarch: "amd64", want: "@opencode/cli-linux-x64-baseline"},
+		{goarch: "arm64", want: "@opencode/cli-linux-arm64"},
 	} {
 		t.Run(tc.goarch, func(t *testing.T) {
-			got, err := openCodeAssetName(tc.goarch)
+			got, err := openCodePackageName(tc.goarch)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got != tc.want {
-				t.Fatalf("asset = %q, want %q", got, tc.want)
+				t.Fatalf("package = %q, want %q", got, tc.want)
 			}
 		})
 	}
-	if _, err := openCodeAssetName("riscv64"); err == nil || !strings.Contains(err.Error(), "unsupported architecture") {
+	if _, err := openCodePackageName("riscv64"); err == nil || !strings.Contains(err.Error(), "unsupported architecture") {
 		t.Fatalf("unsupported arch error = %v", err)
 	}
 }
 
-func TestUpdateOpenCodeInstallsLatestReleaseAsset(t *testing.T) {
-	assetName, err := openCodeAssetName(runtime.GOARCH)
-	if err != nil {
-		t.Skip(err)
-	}
-	archive := openCodeArchive(t, "opencode", tar.TypeReg, shellBinary(t, "1.18.18"))
-	sum := sha256.Sum256(archive)
-	var requested []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requested = append(requested, r.URL.Path)
-		switch r.URL.Path {
-		case "/latest":
-			writeOpenCodeRelease(t, w, "v1.18.18", assetName, serverURL(r)+"/asset", "sha256:"+hex.EncodeToString(sum[:]))
-		case "/asset":
-			_, _ = w.Write(archive)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	installPath := filepath.Join(t.TempDir(), "opencode")
+func TestUpdateOpenCodeInstallsLatestPackage(t *testing.T) {
+	archive := openCodeArchive(t, "package/bin/opencode", tar.TypeReg, shellBinary(t, "2.0.32"))
+	registry := newOpenCodeRegistry(t, "latest", "2.0.32", archive, integrity(archive))
+	opts := openCodeOptions(t, registry)
 	var stdout bytes.Buffer
-	result, err := Update(context.Background(), Options{
-		Agent:       AgentOpenCode,
-		InstallPath: installPath,
-		HTTPClient:  server.Client(),
-		LatestURL:   server.URL + "/latest",
-		ReleaseBase: server.URL + "/tags",
-		Stdout:      &stdout,
-	})
-	if err != nil {
-		t.Fatalf("update opencode: %v", err)
-	}
-	if result.Agent != AgentOpenCode || result.Version != "1.18.18" || result.Path != installPath {
-		t.Fatalf("result = %#v", result)
-	}
-	if got, want := stdout.String(), "opencode: updated to 1.18.18\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
-	assertRequests(t, requested, []string{"/latest", "/asset"})
-	assertExecutableOutput(t, installPath, "1.18.18\n")
-}
-
-func TestUpdateOpenCodePinnedVersionUsesTagRelease(t *testing.T) {
-	assetName, err := openCodeAssetName(runtime.GOARCH)
-	if err != nil {
-		t.Skip(err)
-	}
-	archive := openCodeArchive(t, "./opencode", tar.TypeReg, shellBinary(t, "1.17.0"))
-	sum := sha256.Sum256(archive)
-	var requested []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requested = append(requested, r.URL.Path)
-		switch r.URL.Path {
-		case "/tags/v1.17.0":
-			writeOpenCodeRelease(t, w, "v1.17.0", assetName, serverURL(r)+"/asset", hex.EncodeToString(sum[:]))
-		case "/asset":
-			_, _ = w.Write(archive)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	installPath := filepath.Join(t.TempDir(), "opencode")
-	result, err := Update(context.Background(), Options{
-		Agent:       AgentOpenCode,
-		Version:     "v1.17.0",
-		InstallPath: installPath,
-		HTTPClient:  server.Client(),
-		LatestURL:   server.URL + "/latest",
-		ReleaseBase: server.URL + "/tags",
-	})
-	if err != nil {
-		t.Fatalf("update opencode: %v", err)
-	}
-	if result.Version != "1.17.0" {
-		t.Fatalf("version = %q, want 1.17.0", result.Version)
-	}
-	assertRequests(t, requested, []string{"/tags/v1.17.0", "/asset"})
-	assertExecutableOutput(t, installPath, "1.17.0\n")
-}
-
-func TestUpdateOpenCodeRejectsChecksumMismatchWithoutReplacingBinary(t *testing.T) {
-	assetName, err := openCodeAssetName(runtime.GOARCH)
-	if err != nil {
-		t.Skip(err)
-	}
-	archive := openCodeArchive(t, "opencode", tar.TypeReg, shellBinary(t, "new"))
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/tags/v1.18.18":
-			writeOpenCodeRelease(t, w, "v1.18.18", assetName, serverURL(r)+"/asset", strings.Repeat("0", sha256.Size*2))
-		case "/asset":
-			_, _ = w.Write(archive)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	installPath := filepath.Join(t.TempDir(), "opencode")
-	if err := os.WriteFile(installPath, shellBinary(t, "old"), 0o755); err != nil {
+	opts.Stdout = &stdout
+	// A stale plugin from an earlier exeuntu version must be replaced.
+	stale := filepath.Join(opts.OpenCodeConfigDir, "plugins", "exe-dev.js")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Update(context.Background(), Options{
-		Agent:       AgentOpenCode,
-		Version:     "1.18.18",
-		InstallPath: installPath,
-		HTTPClient:  server.Client(),
-		ReleaseBase: server.URL + "/tags",
-	})
-	if err == nil || !strings.Contains(err.Error(), "verify opencode archive checksum") {
-		t.Fatalf("update err = %v, want checksum error", err)
+	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	assertExecutableOutput(t, installPath, "old\n")
+	if err := os.WriteFile(opts.OpenCodeLegacyPlugin, []byte(`console.warn("[opencode-exe-dev] old");`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Update(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("update opencode: %v", err)
+	}
+	if result.Agent != AgentOpenCode || result.Version != "2.0.32" || result.Path != opts.InstallPath {
+		t.Fatalf("result = %#v", result)
+	}
+	if got, want := stdout.String(), "opencode: updated to 2.0.32\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	assertRequests(t, registry.requested, []string{"/" + registry.pkg + "/latest", "/cli.tgz"})
+	assertExecutableOutput(t, opts.InstallPath, "2.0.32\n")
+	assertFile(t, stale, openCodePlugin, 0o644)
+	assertFile(t, filepath.Join(opts.OpenCodeConfigDir, "opencode.json"), openCodeConfig, 0o644)
+	if _, err := os.Stat(opts.OpenCodeLegacyPlugin); !os.IsNotExist(err) {
+		t.Fatalf("legacy exe.dev plugin still present: %v", err)
+	}
+}
+
+func TestUpdateOpenCodePinnedVersion(t *testing.T) {
+	archive := openCodeArchive(t, "./package/bin/opencode", tar.TypeReg, shellBinary(t, "2.0.16"))
+	registry := newOpenCodeRegistry(t, "2.0.16", "2.0.16", archive, integrity(archive))
+	opts := openCodeOptions(t, registry)
+	opts.Version = "v2.0.16"
+	result, err := Update(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("update opencode: %v", err)
+	}
+	if result.Version != "2.0.16" {
+		t.Fatalf("version = %q, want 2.0.16", result.Version)
+	}
+	assertRequests(t, registry.requested, []string{"/" + registry.pkg + "/2.0.16", "/cli.tgz"})
+	assertExecutableOutput(t, opts.InstallPath, "2.0.16\n")
+}
+
+func TestUpdateOpenCodeRejectsVersionMismatch(t *testing.T) {
+	registry := newOpenCodeRegistry(t, "2.0.16", "2.0.17", nil, integrity([]byte("x")))
+	opts := openCodeOptions(t, registry)
+	opts.Version = "2.0.16"
+	_, err := Update(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "want 2.0.16") {
+		t.Fatalf("update err = %v, want version mismatch", err)
+	}
+}
+
+func TestUpdateOpenCodeRejectsIntegrityMismatchWithoutReplacingBinary(t *testing.T) {
+	archive := openCodeArchive(t, "package/bin/opencode", tar.TypeReg, shellBinary(t, "new"))
+	registry := newOpenCodeRegistry(t, "latest", "2.0.32", archive, integrity([]byte("other")))
+	opts := openCodeOptions(t, registry)
+	if err := os.WriteFile(opts.InstallPath, shellBinary(t, "old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Update(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "verify opencode archive integrity") {
+		t.Fatalf("update err = %v, want integrity error", err)
+	}
+	assertExecutableOutput(t, opts.InstallPath, "old\n")
 }
 
 func TestUpdateOpenCodeRejectsUnsafeOrMissingBinaryWithoutReplacingBinary(t *testing.T) {
@@ -167,85 +125,139 @@ func TestUpdateOpenCodeRejectsUnsafeOrMissingBinaryWithoutReplacingBinary(t *tes
 		entryType byte
 		wantErr   string
 	}{
-		{name: "traversal", entryName: "../opencode", entryType: tar.TypeReg, wantErr: "invalid path"},
-		{name: "symlink", entryName: "opencode", entryType: tar.TypeSymlink, wantErr: "not a regular file"},
-		{name: "missing", entryName: "README.md", entryType: tar.TypeReg, wantErr: "missing opencode"},
+		{name: "traversal", entryName: "../package/bin/opencode", entryType: tar.TypeReg, wantErr: "invalid path"},
+		{name: "symlink", entryName: "package/bin/opencode", entryType: tar.TypeSymlink, wantErr: "not a regular file"},
+		{name: "missing", entryName: "package/README.md", entryType: tar.TypeReg, wantErr: "missing opencode"},
+		{name: "v1 layout", entryName: "opencode", entryType: tar.TypeReg, wantErr: "missing opencode"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assetName, err := openCodeAssetName(runtime.GOARCH)
-			if err != nil {
-				t.Skip(err)
-			}
 			archive := openCodeArchive(t, tc.entryName, tc.entryType, []byte("payload"))
-			sum := sha256.Sum256(archive)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/latest":
-					writeOpenCodeRelease(t, w, "v1.18.18", assetName, serverURL(r)+"/asset", hex.EncodeToString(sum[:]))
-				case "/asset":
-					_, _ = w.Write(archive)
-				default:
-					http.NotFound(w, r)
-				}
-			}))
-			defer server.Close()
-
-			installPath := filepath.Join(t.TempDir(), "opencode")
-			if err := os.WriteFile(installPath, shellBinary(t, "old"), 0o755); err != nil {
+			registry := newOpenCodeRegistry(t, "latest", "2.0.32", archive, integrity(archive))
+			opts := openCodeOptions(t, registry)
+			if err := os.WriteFile(opts.InstallPath, shellBinary(t, "old"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			_, err = Update(context.Background(), Options{
-				Agent:       AgentOpenCode,
-				InstallPath: installPath,
-				HTTPClient:  server.Client(),
-				LatestURL:   server.URL + "/latest",
-			})
+			_, err := Update(context.Background(), opts)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("update err = %v, want %q", err, tc.wantErr)
 			}
-			assertExecutableOutput(t, installPath, "old\n")
+			assertExecutableOutput(t, opts.InstallPath, "old\n")
 		})
 	}
 }
 
-func TestUpdateOpenCodeRequiresReleaseDigest(t *testing.T) {
-	assetName, err := openCodeAssetName(runtime.GOARCH)
+func TestUpdateOpenCodeRequiresSHA512Integrity(t *testing.T) {
+	for _, value := range []string{"", "sha1-AAAA", "sha512-!!!"} {
+		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
+			registry := newOpenCodeRegistry(t, "latest", "2.0.32", nil, value)
+			_, err := Update(context.Background(), openCodeOptions(t, registry))
+			if err == nil || !strings.Contains(err.Error(), "sha512 integrity") {
+				t.Fatalf("update err = %v, want integrity error", err)
+			}
+		})
+	}
+}
+
+func TestUpdateOpenCodeKeepsUserOwnedPluginWithSameName(t *testing.T) {
+	archive := openCodeArchive(t, "package/bin/opencode", tar.TypeReg, shellBinary(t, "2.0.32"))
+	registry := newOpenCodeRegistry(t, "latest", "2.0.32", archive, integrity(archive))
+	opts := openCodeOptions(t, registry)
+	userPlugin := []byte("export default { id: \"mine\" }")
+	if err := os.WriteFile(opts.OpenCodeLegacyPlugin, userPlugin, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(context.Background(), opts); err != nil {
+		t.Fatalf("update opencode: %v", err)
+	}
+	assertFile(t, opts.OpenCodeLegacyPlugin, userPlugin, 0o644)
+}
+
+func TestEmbeddedOpenCodePluginCarriesLegacyMarker(t *testing.T) {
+	if !bytes.Contains(openCodePlugin, []byte(openCodePluginMarker)) {
+		t.Fatalf("embedded plugin lacks legacy-cleanup marker %q", openCodePluginMarker)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(openCodeConfig, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["update"] != "disable" {
+		t.Fatalf("opencode.json update = %v, want disable", cfg["update"])
+	}
+}
+
+func assertFile(t *testing.T, path string, want []byte, mode os.FileMode) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s = %q, want %q", path, got, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != mode {
+		t.Fatalf("%s mode = %v, want %v", path, info.Mode().Perm(), mode)
+	}
+}
+
+type openCodeRegistry struct {
+	*httptest.Server
+	pkg       string
+	requested []string
+}
+
+// newOpenCodeRegistry serves npm registry metadata for this platform's
+// OpenCode package at /<pkg>/<selector> and the tarball at /cli.tgz.
+func newOpenCodeRegistry(t *testing.T, selector, version string, archive []byte, integrity string) *openCodeRegistry {
+	t.Helper()
+	pkg, err := openCodePackageName(runtime.GOARCH)
 	if err != nil {
 		t.Skip(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeOpenCodeRelease(t, w, "v1.18.18", assetName, serverURL(r)+"/asset", "")
+	registry := &openCodeRegistry{pkg: pkg}
+	registry.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		registry.requested = append(registry.requested, r.URL.Path)
+		switch r.URL.Path {
+		case "/" + pkg + "/" + selector:
+			w.Header().Set("Content-Type", "application/json")
+			err := json.NewEncoder(w).Encode(map[string]any{
+				"version": version,
+				"dist": map[string]string{
+					"tarball":   "http://" + r.Host + "/cli.tgz",
+					"integrity": integrity,
+				},
+			})
+			if err != nil {
+				t.Errorf("encode package: %v", err)
+			}
+		case "/cli.tgz":
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
 	}))
-	defer server.Close()
-
-	_, err = Update(context.Background(), Options{
-		Agent:       AgentOpenCode,
-		InstallPath: filepath.Join(t.TempDir(), "opencode"),
-		HTTPClient:  server.Client(),
-		LatestURL:   server.URL,
-	})
-	if err == nil || !strings.Contains(err.Error(), "missing sha256 digest") {
-		t.Fatalf("update err = %v, want missing digest error", err)
-	}
+	t.Cleanup(registry.Close)
+	return registry
 }
 
-func writeOpenCodeRelease(t *testing.T, w http.ResponseWriter, tag, assetName, downloadURL, digest string) {
+func openCodeOptions(t *testing.T, registry *openCodeRegistry) Options {
 	t.Helper()
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{
-		"tag_name": tag,
-		"assets": []map[string]string{{
-			"name":                 assetName,
-			"browser_download_url": downloadURL,
-			"digest":               digest,
-		}},
-	}); err != nil {
-		t.Fatalf("encode release: %v", err)
+	return Options{
+		Agent:                AgentOpenCode,
+		InstallPath:          filepath.Join(t.TempDir(), "opencode"),
+		HTTPClient:           registry.Client(),
+		ReleaseBase:          registry.URL,
+		OpenCodeConfigDir:    filepath.Join(t.TempDir(), "etc", "opencode"),
+		OpenCodeLegacyPlugin: filepath.Join(t.TempDir(), "exe-dev.js"),
 	}
 }
 
-func serverURL(r *http.Request) string {
-	return "http://" + r.Host
+func integrity(b []byte) string {
+	sum := sha512.Sum512(b)
+	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
 func openCodeArchive(t *testing.T, name string, entryType byte, body []byte) []byte {
@@ -301,8 +313,8 @@ func TestNormalizeOpenCodeVersion(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{in: "1.18.18", want: "1.18.18"},
-		{in: " v1.18.18-beta.1 ", want: "1.18.18-beta.1"},
+		{in: "2.0.32", want: "2.0.32"},
+		{in: " v2.0.32-beta.1 ", want: "2.0.32-beta.1"},
 		{in: "../latest", wantErr: true},
 		{in: "", wantErr: true},
 	} {
