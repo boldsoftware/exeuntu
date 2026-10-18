@@ -8,7 +8,8 @@ Type=oneshot
 User=exedev
 Group=exedev
 WorkingDirectory=/home/exedev
-ExecStart=/bin/bash -c /exe.dev/setup
+# The VM's `new --env` variables, as login shells get them.
+ExecStart=/bin/bash -c '[ -r /etc/profile.d/exe-env.sh ] && . /etc/profile.d/exe-env.sh; exec /exe.dev/setup'
 ExecStopPost=/usr/bin/sudo /bin/rm -f /exe.dev/setup
 Environment=HOME=/home/exedev
 Environment=USER=exedev
