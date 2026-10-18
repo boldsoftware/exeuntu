@@ -9,7 +9,7 @@ User=exedev
 Group=exedev
 WorkingDirectory=/home/exedev
 ExecStart=/bin/bash -c /exe.dev/setup
-ExecStartPost=/usr/bin/sudo /bin/rm -f /exe.dev/setup
+ExecStopPost=/usr/bin/sudo /bin/rm -f /exe.dev/setup
 Environment=HOME=/home/exedev
 Environment=USER=exedev
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
