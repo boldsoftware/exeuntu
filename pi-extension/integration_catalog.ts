@@ -26,6 +26,12 @@ export interface CatalogModel {
   name?: string;
   type?: string;
   reasoning?: boolean;
+  // Maps pi thinking-level names (off, minimal, low, medium, high, xhigh, max)
+  // to the reasoning-effort value the provider expects, or null to hide a
+  // level. Present only for reasoning models whose effort range differs from
+  // pi's default (off..high); forwarded onto the model config so pi offers the
+  // right levels (see issue #323).
+  thinkingLevelMap?: Record<string, string | null>;
   input?: ("text" | "image")[];
   contextWindow?: number;
   maxTokens?: number;
@@ -122,6 +128,18 @@ const KNOWN_THINKING_FORMATS: ReadonlySet<string> = new Set([
 ]);
 const KNOWN_MAX_TOKENS_FIELDS: ReadonlySet<string> = new Set(["max_tokens", "max_completion_tokens"]);
 const KNOWN_CACHE_CONTROL_FORMATS: ReadonlySet<string> = new Set(["anthropic"]);
+// The pi thinking-level vocabulary. "max" is unused by pi releases that top out
+// at xhigh and simply ignored there, but is forwarded so builds that understand
+// it (and the catalog's authoritative range) stay in sync.
+const KNOWN_THINKING_LEVELS: ReadonlySet<string> = new Set([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export function validCatalog(cat: unknown): cat is Catalog {
   if (!cat || typeof cat !== "object") return false;
@@ -340,6 +358,7 @@ function configFromIntegrationModel(
   const modelID = integrationModelID(model);
   if (!modelID) return undefined;
   const compat = sanitizeCompat(fallback?.compat, model.provider, modelID);
+  const thinkingLevelMap = sanitizeThinkingLevelMap(fallback?.thinkingLevelMap, model.provider, modelID);
   return {
     id: modelID,
     name: model.name || fallback?.name || modelID,
@@ -351,6 +370,7 @@ function configFromIntegrationModel(
     maxTokens: model.limits?.max_output_tokens ?? fallback?.maxTokens ?? 4096,
     cost: fallback?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...(compat ? { compat: compat as ProviderModelConfig["compat"] } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap: thinkingLevelMap as ProviderModelConfig["thinkingLevelMap"] } : {}),
   };
 }
 
@@ -484,6 +504,33 @@ function sanitizeCompat(c: CatalogCompat | undefined, providerId: string, modelI
       out.cacheControlFormat = c.cacheControlFormat as CompatBag["cacheControlFormat"];
     } else {
       console.warn(`[pi-exe-dev] dropping unknown cacheControlFormat "${c.cacheControlFormat}" on ${providerId}/${modelId}`);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// sanitizeThinkingLevelMap keeps only recognized pi thinking-level keys whose
+// value is a provider effort string or null (null hides the level). The bundled
+// catalog is the source, but validating here keeps a stray key or malformed
+// value from silently misconfiguring a model's reasoning controls. Returns
+// undefined when nothing usable remains, so models without an authoritative map
+// keep pi's default effort range.
+function sanitizeThinkingLevelMap(
+  map: Record<string, string | null> | undefined,
+  providerId: string,
+  modelId: string,
+): Record<string, string | null> | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const out: Record<string, string | null> = {};
+  for (const [level, value] of Object.entries(map)) {
+    if (!KNOWN_THINKING_LEVELS.has(level)) {
+      console.warn(`[pi-exe-dev] dropping unknown thinking level "${level}" on ${providerId}/${modelId}`);
+      continue;
+    }
+    if (value === null || typeof value === "string") {
+      out[level] = value;
+    } else {
+      console.warn(`[pi-exe-dev] dropping invalid thinking level value for "${level}" on ${providerId}/${modelId}`);
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;

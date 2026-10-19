@@ -534,3 +534,132 @@ test("formats prompt integration availability with at most two names", () => {
   assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "gamma"]), "alpha, beta, ...");
   assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "beta", "gamma"]), "alpha, beta, ...");
 });
+
+// A GPT-6 model reflected by the integration carries no reasoning metadata of
+// its own; the thinking-level range must come from the bundled pricing catalog
+// and survive onto the aliased provider model. Before issue #323 the extension
+// dropped it, so pi fell back to off..high and hid xhigh/max.
+function gpt6IntegrationModel(nativeID: string, name: string) {
+  return {
+    id: `openai/${nativeID}`,
+    name,
+    provider: "openai",
+    native_id: nativeID,
+    apis: ["openai_responses"],
+    limits: { context_window: 1050000, max_output_tokens: 128000 },
+    architecture: { input_modalities: ["text", "image"] },
+    exe_dev: { mode: "chatgpt" },
+  };
+}
+
+function gpt6PricingCatalog(models: Catalog["providers"][number]["models"]): Catalog {
+  return {
+    schemaVersion: 1,
+    providers: [{ id: "openai", path: "openai/v1", api: "openai-responses", models }],
+  };
+}
+
+test("forwards the authoritative thinking-level map onto aliased gpt-6 models", () => {
+  const astraMap = { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const solMap = { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const pricing = gpt6PricingCatalog([
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: astraMap,
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    },
+    {
+      id: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: solMap,
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    },
+  ]);
+
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: {
+          schema_version: 1,
+          models: [gpt6IntegrationModel("gpt-6-astra", "GPT-6 Astra"), gpt6IntegrationModel("gpt-6-sol", "GPT-6 Sol")],
+        },
+      },
+    ],
+    pricing,
+    (message) => assert.fail(`unexpected warning: ${message}`),
+  );
+
+  const openai = infos.get("exe-dev-openai");
+  assert.ok(openai);
+  const byId = new Map(openai.config.models?.map((m) => [m.id, m]));
+
+  const astra = byId.get("gpt-6-astra@llm");
+  assert.ok(astra);
+  assert.equal(astra.reasoning, true);
+  assert.deepEqual(astra.thinkingLevelMap, astraMap);
+
+  const sol = byId.get("gpt-6-sol@llm");
+  assert.ok(sol);
+  assert.deepEqual(sol.thinkingLevelMap, solMap);
+});
+
+test("sanitizes stray thinking-level keys and non-string values", () => {
+  const consoleWarnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => consoleWarnings.push(args.join(" "));
+  const pricing = gpt6PricingCatalog([
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: {
+        low: "low",
+        xhigh: "xhigh",
+        off: null,
+        bogus: "nope",
+        high: 7 as unknown as string,
+      },
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    },
+  ]);
+
+  let astra;
+  try {
+    const infos = providerInfosFromIntegrationCatalogs(
+      [
+        {
+          name: "llm",
+          baseURL: "https://llm.int.exe.xyz",
+          catalog: { schema_version: 1, models: [gpt6IntegrationModel("gpt-6-astra", "GPT-6 Astra")] },
+        },
+      ],
+      pricing,
+      (message) => assert.fail(`unexpected integration warning: ${message}`),
+    );
+    astra = infos.get("exe-dev-openai")?.config.models?.[0];
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(astra);
+  assert.deepEqual(astra.thinkingLevelMap, { low: "low", xhigh: "xhigh", off: null });
+  assert.ok(consoleWarnings.some((w) => /unknown thinking level "bogus"/.test(w)));
+  assert.ok(consoleWarnings.some((w) => /invalid thinking level value for "high"/.test(w)));
+});
