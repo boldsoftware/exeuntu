@@ -57,7 +57,7 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirror://mirrors.ubuntu.c
 		systemd systemd-sysv \
 		atop btop iotop ncdu \
 		git \
-		libglib2.0-0 libnss3 libx11-6 libxcomposite1 libxdamage1 \
+		libglib2.0-0 libnss3 libnss3-tools libx11-6 libxcomposite1 libxdamage1 \
 		libxext6 libxi6 libxrandr2 libgbm1 libgtk-3-0 \
 		fonts-noto-color-emoji fonts-symbola \
 		docker.io docker-buildx docker-compose-v2 \
@@ -263,6 +263,12 @@ RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/exedev/.bashrc && \
 
 # Configure git to use 'main' as default branch name
 RUN git config --global init.defaultBranch main
+
+# headless-shell trusts the root above the compromised eMudhra intermediates;
+# distrust it in exedev's NSS database.
+RUN --mount=type=bind,source=distrust-emudhra.sh,target=/tmp/distrust-emudhra.sh \
+	bash /tmp/distrust-emudhra.sh && \
+	certutil -L -d sql:/home/exedev/.pki/nssdb | grep -q '^distrusted emSign ECC Root CA - G3  *p,p,p$'
 
 # Pre-install the DuckDB extensions the look integration's usage text needs
 # (httpfs for s3://, iceberg for iceberg_scan; iceberg loads avro itself) into
