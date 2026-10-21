@@ -1,7 +1,23 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Get Chrome/Chromium from chromedp/headless-shell
-FROM docker.io/chromedp/headless-shell:stable AS chrome
+# Stage 1: Get the headless-shell (Chromium) build Shelley's release metadata
+# advertises for this platform, so it matches what Shelley upgrades to.
+FROM docker.io/library/ubuntu:24.04 AS chrome
+ARG TARGETARCH
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends ca-certificates curl jq && \
+	curl -fsSL --retry 5 --retry-all-errors -o /tmp/release.json https://boldsoftware.github.io/shelley/release.json && \
+	build=$(jq -ce --arg p "linux_$TARGETARCH" '.headless_shells[$p] // error("no headless_shells.\($p) in release.json")' /tmp/release.json) && \
+	version=$(jq -r .version <<<"$build") && \
+	url=$(jq -r .url <<<"$build") && \
+	[[ $url == https://github.com/boldsoftware/shelley/releases/download/headless-shell/v"${version#Chromium }"/* ]] && \
+	curl -fsSL --retry 5 --retry-all-errors -o /tmp/headless-shell.tar.gz "$url" && \
+	tar -xzf /tmp/headless-shell.tar.gz -C / --no-same-owner && \
+	[[ -x /headless-shell/headless-shell ]] && \
+	# Record the release, which the binary's --version can't show, for Shelley's version check.
+	sum=$(sha256sum /headless-shell/headless-shell | cut -d' ' -f1) && \
+	printf '%s\nsha256 %s\n' "$version" "$sum" > /headless-shell/headless-shell-version.txt
 
 # Build the guest-facing exeuntu helper.
 FROM docker.io/library/golang:1.27.3 AS exeuntu-cli
@@ -244,7 +260,7 @@ ENV EXEUNTU=1
 # STOPSIGNAL SIGRTMIN+3
 
 
-# Copy the self-contained Chrome bundle from chromedp/headless-shell
+# Copy the self-contained Chrome bundle
 COPY --from=chrome /headless-shell /headless-shell
 ENV PATH="/usr/local/bin:/headless-shell:${PATH}"
 
@@ -264,8 +280,8 @@ RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/exedev/.bashrc && \
 # Configure git to use 'main' as default branch name
 RUN git config --global init.defaultBranch main
 
-# headless-shell trusts the root above the compromised eMudhra intermediates;
-# distrust it in exedev's NSS database.
+# Chromium releases, and so arm64's headless-shell, trust the root above the
+# compromised eMudhra intermediates; distrust it in exedev's NSS database.
 RUN --mount=type=bind,source=distrust-emudhra.sh,target=/tmp/distrust-emudhra.sh \
 	bash /tmp/distrust-emudhra.sh && \
 	certutil -L -d sql:/home/exedev/.pki/nssdb | grep -q '^distrusted emSign ECC Root CA - G3  *p,p,p$'
