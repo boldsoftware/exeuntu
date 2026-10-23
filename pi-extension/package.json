@@ -11,5 +11,5 @@
       "./index.ts"
     ]
   },
-  "packageManager": "pnpm@10.34.0"
+  "packageManager": "pnpm@12.14.0"
 }
