@@ -308,6 +308,7 @@ RUN cat /tmp/motd-snippet.bash >> /home/exedev/.bashrc && rm /tmp/motd-snippet.b
 # The shelley binary itself is installed at vm creation.
 COPY shelley.socket /etc/systemd/system/shelley.socket
 COPY shelley.service /etc/systemd/system/shelley.service
+COPY tmpfiles-shelley.conf /etc/tmpfiles.d/shelley.conf
 RUN chmod 644 /etc/systemd/system/shelley.socket /etc/systemd/system/shelley.service && \
     systemctl enable shelley.socket
 

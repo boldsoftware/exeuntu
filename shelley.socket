@@ -3,6 +3,12 @@ Description=Shelley Socket
 
 [Socket]
 ListenStream=127.0.0.1:9999
+# The CLI's socket, so that `shelley client` starts Shelley and waits for it
+# rather than failing until something else has started it.
+ListenStream=/home/exedev/.config/shelley/shelley.sock
+SocketUser=exedev
+SocketGroup=exedev
+SocketMode=0600
 Accept=no
 
 [Install]
