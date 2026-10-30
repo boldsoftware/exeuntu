@@ -280,8 +280,9 @@ RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/exedev/.bashrc && \
 # Configure git to use 'main' as default branch name
 RUN git config --global init.defaultBranch main
 
-# Chromium releases, and so arm64's headless-shell, trust the root above the
-# compromised eMudhra intermediates; distrust it in exedev's NSS database.
+# Chromium blocks the compromised eMudhra intermediates only since
+# 156.0.8078.69 and 157.0.8103.20; distrust the root above them in exedev's
+# NSS database, which older builds honor too.
 RUN --mount=type=bind,source=distrust-emudhra.sh,target=/tmp/distrust-emudhra.sh \
 	bash /tmp/distrust-emudhra.sh && \
 	certutil -L -d sql:/home/exedev/.pki/nssdb | grep -q '^distrusted emSign ECC Root CA - G3  *p,p,p$'
