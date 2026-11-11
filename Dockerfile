@@ -20,7 +20,7 @@ RUN apt-get update && \
 	printf '%s\nsha256 %s\n' "$version" "$sum" > /headless-shell/headless-shell-version.txt
 
 # Build the guest-facing exeuntu helper.
-FROM docker.io/library/golang:1.27.3 AS exeuntu-cli
+FROM docker.io/library/golang:1.27.4 AS exeuntu-cli
 ARG EXEUNTU_GIT_VERSION=unknown
 WORKDIR /src/exeuntu-cli
 COPY cli/ ./
