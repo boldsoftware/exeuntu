@@ -253,6 +253,8 @@ RUN echo '/dev/vda / ext4 defaults,x-systemd.growfs 0 1' > /etc/fstab
 # that also run at boot.
 COPY tmpfiles-tmp.conf /etc/tmpfiles.d/tmp.conf
 
+COPY --chmod=644 fstrim-timer.conf /etc/systemd/system/fstrim.timer.d/exe.conf
+
 ENV EXEUNTU=1
 
 # https://github.com/trfore/docker-ubuntu2404-systemd/blob/main/Dockerfile suggests the following
