@@ -318,7 +318,7 @@ RUN chmod 644 /etc/systemd/system/shelley.socket /etc/systemd/system/shelley.ser
 # Give git the identity exe.dev writes at VM creation (see
 # https://exe.dev/docs/git-identity), as system config so that anything in
 # ~/.gitconfig overrides it. git skips the include if the file is missing.
-RUN git config --system include.path /exe.dev/gitconfig
+RUN git config --system include.path /exe.dev/etc/gitconfig
 
 # Create systemd oneshot service for /exe.dev/setup script
 COPY exe-setup.service /etc/systemd/system/exe-setup.service
