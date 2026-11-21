@@ -1,5 +1,5 @@
 # Build the guest-facing exeuntu helper.
-FROM docker.io/library/golang:1.27.3 AS exeuntu-cli
+FROM docker.io/library/golang:1.27.4 AS exeuntu-cli
 ARG EXEUNTU_GIT_VERSION=unknown
 WORKDIR /src/exeuntu-cli
 COPY cli/ ./
@@ -217,6 +217,8 @@ RUN echo '/dev/vda / ext4 defaults,x-systemd.growfs 0 1' > /etc/fstab
 # that also run at boot.
 COPY tmpfiles-tmp.conf /etc/tmpfiles.d/tmp.conf
 
+COPY --chmod=644 fstrim-timer.conf /etc/systemd/system/fstrim.timer.d/exe.conf
+
 ENV EXEUNTU=1
 
 # https://github.com/trfore/docker-ubuntu2404-systemd/blob/main/Dockerfile suggests the following
@@ -264,6 +266,11 @@ COPY shelley.service /etc/systemd/system/shelley.service
 COPY tmpfiles-shelley.conf /etc/tmpfiles.d/shelley.conf
 RUN chmod 644 /etc/systemd/system/shelley.socket /etc/systemd/system/shelley.service && \
     systemctl enable shelley.socket
+
+# Give git the identity exe.dev writes at VM creation (see
+# https://exe.dev/docs/git-identity), as system config so that anything in
+# ~/.gitconfig overrides it. git skips the include if the file is missing.
+RUN git config --system include.path /exe.dev/etc/gitconfig
 
 # Create systemd oneshot service for /exe.dev/setup script
 COPY exe-setup.service /etc/systemd/system/exe-setup.service
